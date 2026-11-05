@@ -1,0 +1,148 @@
+/* The lesson layers: paper windows, 3D stages, the pen's ink, labels, then buttons. */
+.lesson-layer {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.lesson-window {
+  position: absolute;
+  box-sizing: border-box;
+  background: #fbf8f0;
+  border-radius: 12px;
+  border: 1px solid rgba(25, 28, 36, 0.14);
+  box-shadow: 0 16px 44px rgba(10, 14, 24, 0.32), 0 2px 7px rgba(10, 14, 24, 0.16);
+  overflow: hidden;
+}
+
+.lesson-window-bar,
+.lesson-stage-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  color: #6c7079;
+  font-family: Hand, sans-serif;
+}
+
+.lesson-window-bar {
+  background: #efeadf;
+  border-bottom: 1px solid rgba(25, 28, 36, 0.09);
+}
+
+.lesson-stage-title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.82);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+.lesson-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #d9d4c8;
+  flex: none;
+}
+
+.lesson-window-title {
+  flex: 1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lesson-stage {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+}
+
+.lesson-stage:active {
+  cursor: grabbing;
+}
+
+.lesson-stage-canvas {
+  position: absolute;
+  left: 0;
+  display: block;
+}
+
+.lesson-readout {
+  position: absolute;
+  left: 10px;
+  display: none;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: rgba(20, 23, 30, 0.6);
+  color: #f4f2ec;
+  font: 500 12.5px/1.45 ui-monospace, monospace;
+  white-space: pre;
+  pointer-events: none;
+}
+
+.lesson-ink {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.lesson-button {
+  position: absolute;
+  padding: 0.42em 0.95em;
+  border: 1.5px solid color-mix(in srgb, var(--ink) 72%, #10131a);
+  border-radius: 999px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ink) 18%, #fff), color-mix(in srgb, var(--ink) 42%, #fff));
+  color: #15171c;
+  font-family: Hand, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 5px 16px rgba(10, 14, 24, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  animation: lesson-pop 260ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+}
+
+.lesson-button:hover {
+  filter: brightness(1.05);
+}
+
+.lesson-close {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(20, 23, 30, 0.74);
+  color: #fff;
+  font: 500 16px/26px system-ui, sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.lesson-window.popping {
+  animation: lesson-pop 380ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+@keyframes lesson-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

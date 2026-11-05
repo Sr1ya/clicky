@@ -1,0 +1,376 @@
+/* Real-time graphics layer: a transparent, click-through full-monitor page.
+   Only the card and the strokes are visible; everything else is see-through. */
+
+:root {
+  --paper: #fbf8f1;
+  --paper-edge: rgba(31, 36, 48, 0.08);
+  --ink: #1f2430;
+  --ink-soft: #5c6370;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+  pointer-events: none;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+body.hidden-for-capture {
+  opacity: 0;
+}
+
+.screen-layer {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: visible;
+}
+
+.card {
+  position: fixed;
+  box-sizing: border-box;
+  padding: 10px 18px 16px;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge);
+  border-radius: 14px;
+  box-shadow:
+    0 18px 48px rgba(15, 20, 30, 0.28),
+    0 2px 6px rgba(15, 20, 30, 0.12);
+  transform-origin: 50% 40%;
+  animation: card-in 420ms cubic-bezier(0.2, 0.9, 0.25, 1.15) both;
+}
+
+.card.leaving {
+  animation: card-out 380ms ease-in both;
+}
+
+.card-caption {
+  font: 500 11px/1.4 system-ui, sans-serif;
+  color: var(--ink-soft);
+  text-align: center;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+  opacity: 0.85;
+}
+
+.card-title {
+  font-family: "Hand", cursive;
+  font-weight: 700;
+  font-size: 30px;
+  line-height: 1.1;
+  color: var(--ink);
+  margin: 2px 0 6px;
+}
+
+.card svg {
+  display: block;
+  overflow: visible;
+}
+
+.screen-layer.leaving,
+.screen-layer.leaving * {
+  transition: opacity 380ms ease-in;
+  opacity: 0;
+}
+
+text.hand {
+  font-family: "Hand", cursive;
+  fill: var(--ink);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes card-out {
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+}
+
+/* ---------------------------------------------------------------- 3D stage */
+
+.stage3d {
+  position: fixed;
+  pointer-events: auto;
+  animation: card-in 480ms cubic-bezier(0.2, 0.9, 0.25, 1.15) both;
+}
+
+.stage3d.leaving {
+  animation: card-out 380ms ease-in both;
+}
+
+.stage3d canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+.stage3d canvas:active {
+  cursor: grabbing;
+}
+
+.stage3d-leaders {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.stage3d-title {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  padding: 4px 14px 6px;
+  border-radius: 999px;
+  background: rgba(251, 248, 241, 0.94);
+  box-shadow: 0 4px 16px rgba(15, 20, 30, 0.22);
+  font-family: "Hand", cursive;
+  font-weight: 700;
+  font-size: 24px;
+  color: var(--ink);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.label3d {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 2px 9px 3px;
+  border: 1.5px solid var(--ink);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 2px 8px rgba(15, 20, 30, 0.18);
+  font: 600 12.5px/1.35 system-ui, sans-serif;
+  color: var(--ink);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* Earlier drawing recedes when a step asks for focus. */
+svg g {
+  transition: opacity 500ms ease;
+}
+
+svg g.dimmed {
+  opacity: 0.26;
+}
+
+.sub {
+  font-family: "Inter", "Noto Sans", system-ui, sans-serif;
+  font-weight: 500;
+}
+
+.mono {
+  font-family: "JetBrains Mono", "Fira Code", "DejaVu Sans Mono", monospace;
+  white-space: pre;
+}
+
+.label3d-desc {
+  max-width: 190px;
+  white-space: normal;
+  font: 400 11px/1.3 system-ui, sans-serif;
+  color: var(--ink-soft);
+}
+
+/* The card closes on click; the 3D stage keeps clicks for rotating. */
+.card {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.close-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(31, 36, 48, 0.15);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  font: 500 18px/26px system-ui, sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 6px rgba(15, 20, 30, 0.18);
+  opacity: 0.7;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.close-button:hover {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+/* Isometric labels sit above the solids with a paper halo so lines never cut them. */
+svg g.iso-label text {
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+
+/* Labels from earlier steps shrink to their name so the current step's labels lead. */
+.label3d.old {
+  font-size: 0.86em;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+.label3d.old .label3d-desc {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- 3D dock
+   The iso-model skill's viewer UI: legend chips (the colour key), an
+   inspector for the tapped / hovered / narrated part, and the controls. */
+.stage3d {
+  --accent3d: #5fd0e6;
+  --panel3d: rgba(25, 27, 37, 0.86);
+  --line3d: #2e3142;
+  --fg3d: #eeeef3;
+  --muted3d: #9296a8;
+}
+
+.stage3d-dock {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  pointer-events: none;
+  font: 600 11px/1.3 "JetBrains Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+  color: var(--fg3d);
+}
+
+.stage3d-legend,
+.stage3d-controls {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  pointer-events: auto;
+}
+
+.stage3d-legend:empty {
+  display: none;
+}
+
+.stage3d-dock button {
+  font: inherit;
+  color: var(--fg3d);
+  background: var(--panel3d);
+  border: 1px solid var(--line3d);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+
+.stage3d-dock button:hover {
+  border-color: var(--muted3d);
+}
+
+.stage3d-dock .chip3d {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  animation: chip-in 320ms ease-out both;
+}
+
+.stage3d-dock .chip3d[aria-pressed="true"] {
+  border-color: var(--fg3d);
+  background: rgba(60, 64, 80, 0.92);
+}
+
+.stage3d-controls button[aria-pressed="true"] {
+  color: #111;
+  background: var(--accent3d);
+  border-color: var(--accent3d);
+}
+
+.stage3d-inspector {
+  pointer-events: auto;
+  max-width: 460px;
+  padding: 9px 12px;
+  border: 1px solid var(--line3d);
+  border-radius: 10px;
+  background: var(--panel3d);
+  backdrop-filter: blur(8px);
+}
+
+.stage3d-inspector .k {
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted3d);
+}
+
+.stage3d-inspector .n {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 3px;
+  font: 700 16px/1.2 "Familjen Grotesk", "Inter", system-ui, sans-serif;
+}
+
+/* Fixed height: the dock is anchored at the bottom, so a taller inspector
+   would push the legend chips up mid-click. Long descriptions clamp. */
+.stage3d-inspector .d {
+  height: calc(11.5px * 1.5 * 3);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  font-weight: 400;
+  font-size: 11.5px;
+  line-height: 1.5;
+  opacity: 0.88;
+}
+
+.stage3d-dock .sw {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+@keyframes chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}

@@ -1,0 +1,4 @@
+/target
+/gen
+.claude/settings.local.json
+api_keys.txt

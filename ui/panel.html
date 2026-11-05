@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Clicky</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <header>
+    <div class="logo" aria-hidden="true"></div>
+    <div>
+      <h1>Clicky</h1>
+      <p id="state-line" class="muted">starting…</p>
+    </div>
+  </header>
+
+  <section class="card">
+    <button id="talk-button" class="talk">Hold to talk</button>
+    <p id="hotkey-line" class="muted small"></p>
+    <p id="cursor-line" class="muted small"></p>
+  </section>
+
+  <section id="conversation" class="card hidden">
+    <p class="label">You said</p>
+    <p id="last-transcript"></p>
+    <p class="label">Clicky said</p>
+    <p id="last-response"></p>
+  </section>
+
+  <p id="error-line" class="error hidden"></p>
+
+  <section class="card">
+    <h2>Settings</h2>
+    <p id="missing-line" class="warning hidden"></p>
+
+    <label>Model
+      <select id="model">
+        <option value="claude-opus-5-5">Claude Opus 5.5</option>
+        <option value="claude-sonnet-5-5">Claude Sonnet 5.5</option>
+      </select>
+    </label>
+
+    <label>Anthropic API key
+      <input id="anthropic-key" type="password" autocomplete="off" spellcheck="false" />
+    </label>
+    <label>AssemblyAI API key <span class="muted">(speech to text)</span>
+      <input id="assemblyai-key" type="password" autocomplete="off" spellcheck="false" />
+    </label>
+    <label>ElevenLabs API key <span class="muted">(optional voice; system voice otherwise)</span>
+      <input id="elevenlabs-key" type="password" autocomplete="off" spellcheck="false" />
+    </label>
+    <label>ElevenLabs voice ID
+      <input id="voice-id" type="text" autocomplete="off" spellcheck="false" />
+    </label>
+    <div class="field">
+      <span>Puter voice <span class="muted">(free monthly allowance on your Puter account; used when there's no ElevenLabs key)</span></span>
+      <div class="actions">
+        <button id="puter-button" class="secondary">Sign in with Puter</button>
+        <span id="puter-status" class="muted small"></span>
+      </div>
+    </div>
+    <label class="row">
+      <input id="show-cursor" type="checkbox" />
+      Always show the buddy next to my cursor
+    </label>
+
+    <div class="actions">
+      <button id="save-button" class="primary">Save</button>
+      <span id="save-status" class="muted small"></span>
+    </div>
+    <p id="config-path" class="muted small"></p>
+  </section>
+
+  <footer>
+    <button id="quit-button" class="link">Quit Clicky</button>
+  </footer>
+
+  <script src="panel.js"></script>
+</body>
+</html>

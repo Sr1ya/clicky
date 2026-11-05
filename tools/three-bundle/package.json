@@ -1,0 +1,12 @@
+{
+  "name": "clicky-three-bundle",
+  "private": true,
+  "description": "Builds ui/visual/three.bundle.js: three.js r186 plus the addons Clicky uses, exposed as window.THREE / window.THREE_ADDONS for the inline-script overlay page.",
+  "scripts": {
+    "build": "esbuild entry.js --bundle --minify --format=iife --target=es2020 --legal-comments=eof --outfile=../../ui/visual/three.bundle.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.2",
+    "three": "0.186.0"
+  }
+}
