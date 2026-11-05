@@ -668,6 +668,26 @@ impl Companion {
                 }
             }
         }
+        if !config.fish_api_key.is_empty() {
+            match speech::synthesize_with_fish(
+                &self.http_client,
+                &config.fish_api_key,
+                &config.fish_tts_model,
+                &config.fish_voice_id,
+                text,
+            )
+            .await
+            {
+                Ok(mp3_bytes) => {
+                    self.play_and_wait(mp3_bytes).await;
+                    return;
+                }
+                Err(error) => {
+                    log::warn!("Fish Audio failed, trying the next voice: {error:#}");
+                    self.shared.lock().unwrap().last_error = Some(format!("Fish Audio: {error:#}"));
+                }
+            }
+        }
         if !config.puter_auth_token.is_empty() {
             match self.speak_with_puter(config, text).await {
                 Ok(()) => return,

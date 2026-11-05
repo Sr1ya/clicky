@@ -118,6 +118,41 @@ fn run_player_thread(command_receiver: std_mpsc::Receiver<PlayerCommand>, shared
     }
 }
 
+/// Fish Audio text to speech. Returns MP3 bytes. Send a voice id every time: without
+/// one Fish picks a different voice per request, and a lesson would keep changing speaker.
+pub async fn synthesize_with_fish(
+    http_client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    voice_id: &str,
+    text: &str,
+) -> Result<Vec<u8>> {
+    let started = std::time::Instant::now();
+    let response = http_client
+        .post("https://api.fish.audio/v1/tts")
+        .bearer_auth(api_key)
+        .header("model", model)
+        .json(&serde_json::json!({
+            "text": text,
+            "reference_id": voice_id,
+            "format": "mp3",
+            "latency": "normal",
+        }))
+        .send()
+        .await?;
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "Fish Audio error {status}: {}",
+            error_body.chars().take(300).collect::<String>()
+        ));
+    }
+    let audio = response.bytes().await?.to_vec();
+    log::info!("Fish Audio: {} chars in {} ms", text.chars().count(), started.elapsed().as_millis());
+    Ok(audio)
+}
+
 pub async fn synthesize_with_elevenlabs(
     http_client: &reqwest::Client,
     api_key: &str,

@@ -467,6 +467,8 @@ struct PanelConfig {
     has_anthropic_api_key: bool,
     has_assemblyai_api_key: bool,
     has_elevenlabs_api_key: bool,
+    has_fish_api_key: bool,
+    fish_voice_id: String,
     has_puter_auth_token: bool,
     puter_voice: String,
     missing_keys: Vec<&'static str>,
@@ -484,6 +486,8 @@ fn get_config(state: tauri::State<AppState>) -> PanelConfig {
         has_anthropic_api_key: !config.anthropic_api_key.is_empty(),
         has_assemblyai_api_key: !config.assemblyai_api_key.is_empty(),
         has_elevenlabs_api_key: !config.elevenlabs_api_key.is_empty(),
+        has_fish_api_key: !config.fish_api_key.is_empty(),
+        fish_voice_id: config.fish_voice_id.clone(),
         has_puter_auth_token: !config.puter_auth_token.is_empty(),
         puter_voice: format!("{} / {}", config.puter_tts_provider, config.puter_tts_voice),
         missing_keys: config.missing_keys(),
@@ -498,6 +502,8 @@ struct ConfigUpdate {
     assemblyai_api_key: String,
     elevenlabs_api_key: String,
     elevenlabs_voice_id: String,
+    fish_api_key: String,
+    fish_voice_id: String,
     model: String,
     show_cursor_always: bool,
 }
@@ -512,6 +518,8 @@ fn save_config(state: tauri::State<AppState>, update: ConfigUpdate) -> Result<()
             (update.assemblyai_api_key, &mut config.assemblyai_api_key),
             (update.elevenlabs_api_key, &mut config.elevenlabs_api_key),
             (update.elevenlabs_voice_id, &mut config.elevenlabs_voice_id),
+            (update.fish_api_key, &mut config.fish_api_key),
+            (update.fish_voice_id, &mut config.fish_voice_id),
             (update.model, &mut config.model),
         ] {
             if !new_value.trim().is_empty() {

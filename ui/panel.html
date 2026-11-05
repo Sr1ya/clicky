@@ -52,8 +52,14 @@
     <label>ElevenLabs voice ID
       <input id="voice-id" type="text" autocomplete="off" spellcheck="false" />
     </label>
+    <label>Fish Audio API key <span class="muted">(the voice, when there's no ElevenLabs key)</span>
+      <input id="fish-key" type="password" autocomplete="off" spellcheck="false" />
+    </label>
+    <label>Fish Audio voice ID
+      <input id="fish-voice-id" type="text" autocomplete="off" spellcheck="false" />
+    </label>
     <div class="field">
-      <span>Puter voice <span class="muted">(free monthly allowance on your Puter account; used when there's no ElevenLabs key)</span></span>
+      <span>Puter voice <span class="muted">(backup if Fish Audio fails; free monthly allowance on your Puter account)</span></span>
       <div class="actions">
         <button id="puter-button" class="secondary">Sign in with Puter</button>
         <span id="puter-status" class="muted small"></span>

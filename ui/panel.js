@@ -45,6 +45,8 @@ async function loadConfig() {
   element("anthropic-key").placeholder = placeholderFor(config.has_anthropic_api_key);
   element("assemblyai-key").placeholder = placeholderFor(config.has_assemblyai_api_key);
   element("elevenlabs-key").placeholder = placeholderFor(config.has_elevenlabs_api_key);
+  element("fish-key").placeholder = placeholderFor(config.has_fish_api_key);
+  element("fish-voice-id").value = config.fish_voice_id;
   element("puter-status").textContent = config.has_puter_auth_token
     ? `signed in · ${config.puter_voice}`
     : "not signed in";
@@ -65,11 +67,13 @@ async function saveConfig() {
         assemblyai_api_key: element("assemblyai-key").value,
         elevenlabs_api_key: element("elevenlabs-key").value,
         elevenlabs_voice_id: element("voice-id").value,
+        fish_api_key: element("fish-key").value,
+        fish_voice_id: element("fish-voice-id").value,
         model: element("model").value,
         show_cursor_always: element("show-cursor").checked,
       },
     });
-    for (const id of ["anthropic-key", "assemblyai-key", "elevenlabs-key"]) element(id).value = "";
+    for (const id of ["anthropic-key", "assemblyai-key", "elevenlabs-key", "fish-key"]) element(id).value = "";
     saveStatus.textContent = "saved";
     await loadConfig();
   } catch (error) {

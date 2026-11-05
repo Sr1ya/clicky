@@ -17,7 +17,7 @@ release ─▶ ForceEndpoint ─▶ final transcript
    └▶ spectacle (or Screenshot portal) ─▶ crop per monitor ─▶ 1280px JPEGs
    └▶ Claude Messages API (SSE) with screenshots + last 10 exchanges
    └▶ strip [POINT:x,y:label:screenN] ─▶ map pixels → desktop coordinates
-   ├▶ ElevenLabs MP3 via rodio (or spd-say if no key)
+   ├▶ ElevenLabs or Fish Audio MP3 via rodio (Puter as backup, spd-say if no key)
    └▶ layer-shell overlay: Bézier flight → speech bubble → fly back
 ```
 
@@ -41,7 +41,7 @@ release ─▶ ForceEndpoint ─▶ final transcript
 | `src/pointing.rs` | Assembles the system prompt, `[POINT:…]` parsing, coordinate mapping (unit tested) |
 | `src/lesson.rs` | Lessons: routes a reply to the sandbox, synthesizes `say()` lines ahead, plays them in order and tells the page when each starts and ends |
 | `src/prompts/` | The prompt as skill files: `companion.md` (who Clicky is), `skill_lesson.md` (how a program teaches), `skill_2d_lesson.md` and `skill_3d_lesson.md` (the drawing languages). Older, no longer sent: `skill_2d.md`, `skill_3d.md` (modeling craft), `pointing.md` |
-| `src/speech.rs` | ElevenLabs TTS + rodio playback, `spd-say` fallback |
+| `src/speech.rs` | ElevenLabs and Fish Audio TTS + rodio playback, `spd-say` fallback |
 | `src/overlay.rs` | The animated buddy: GTK layer-shell windows drawn with cairo |
 | `src/visual.rs` | Real-time graphics: parses Claude's `<visual>` block and drives a transparent WebKit layer-shell surface |
 | `ui/visual/` | Graphics renderer page: `visual.js` (rough.js hand-drawn cards + on-screen marks), `scene3d.js` (three.js models), bundled rough.js (MIT), three.js r186 + addons (MIT, `three.bundle.js`, rebuilt with `cd tools/three-bundle && npm install && npm run build`) and Caveat font (OFL) |
@@ -75,6 +75,7 @@ variables:
 | `ANTHROPIC_BASE_URL` | Anthropic-compatible proxy host (no `/v1`); drops fallbacks, keeps `effort: low` | no — defaults to `https://api.anthropic.com` |
 | `ASSEMBLYAI_API_KEY` | speech to text | yes |
 | `ELEVENLABS_API_KEY` | natural voice | no — falls back to the system voice |
+| `FISH_API_KEY` | natural voice, used when there's no ElevenLabs key (`fish_voice_id` and `fish_tts_model` in the config choose voice and model) | no |
 
 KDE will pop up a dialog asking you to confirm the **Ctrl+Alt+Space** shortcut.
 You can rebind it any time in System Settings → Shortcuts → Clicky.

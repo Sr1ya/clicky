@@ -12,7 +12,11 @@ pub const DEFAULT_API_BASE_URL: &str = "https://api.anthropic.com";
 /// Low effort starts speaking in 2-3 s. Medium plans richer 3D models but can take a minute to say anything.
 pub const DEFAULT_EFFORT: &str = "low";
 pub const DEFAULT_ELEVENLABS_VOICE_ID: &str = "21m00Tcm4TlvDq8ikWAM";
-/// Puter voice used when signed in to Puter and no ElevenLabs key is set.
+/// Fish Audio's no-cost tier; `s2.1-pro` needs paid credit on the account.
+pub const DEFAULT_FISH_TTS_MODEL: &str = "s2.1-pro-free";
+/// "Ethan", a curious explainer, from Fish's public voice library.
+pub const DEFAULT_FISH_VOICE_ID: &str = "536d3a5e000945adb7038665781a4aca";
+/// Puter voice used as a fallback when signed in to Puter.
 pub const DEFAULT_PUTER_TTS_PROVIDER: &str = "openai";
 pub const DEFAULT_PUTER_TTS_MODEL: &str = "gpt-4o-mini-tts";
 pub const DEFAULT_PUTER_TTS_VOICE: &str = "coral";
@@ -30,6 +34,11 @@ pub struct Config {
     pub assemblyai_api_key: String,
     pub elevenlabs_api_key: String,
     pub elevenlabs_voice_id: String,
+    pub fish_api_key: String,
+    /// A voice from Fish's library (the id in its fish.audio/m/ URL).
+    pub fish_voice_id: String,
+    /// `s2.1-pro-free`, `s2.1-pro`, `s2-pro`, `drama-3`.
+    pub fish_tts_model: String,
     /// Puter account token (from `clicky puter-login` or the panel). Puter's
     /// free monthly allowance on that account pays for the speech.
     pub puter_auth_token: String,
@@ -59,6 +68,9 @@ impl Default for Config {
             assemblyai_api_key: String::new(),
             elevenlabs_api_key: String::new(),
             elevenlabs_voice_id: DEFAULT_ELEVENLABS_VOICE_ID.into(),
+            fish_api_key: String::new(),
+            fish_voice_id: DEFAULT_FISH_VOICE_ID.into(),
+            fish_tts_model: DEFAULT_FISH_TTS_MODEL.into(),
             puter_auth_token: String::new(),
             puter_tts_provider: DEFAULT_PUTER_TTS_PROVIDER.into(),
             puter_tts_model: DEFAULT_PUTER_TTS_MODEL.into(),
@@ -107,6 +119,7 @@ impl Config {
             ("ASSEMBLYAI_API_KEY", &mut self.assemblyai_api_key),
             ("ELEVENLABS_API_KEY", &mut self.elevenlabs_api_key),
             ("ELEVENLABS_VOICE_ID", &mut self.elevenlabs_voice_id),
+            ("FISH_API_KEY", &mut self.fish_api_key),
             ("PUTER_AUTH_TOKEN", &mut self.puter_auth_token),
             ("BRAVE_SEARCH_API_KEY", &mut self.brave_search_api_key),
             ("CLICKY_EFFORT", &mut self.effort),

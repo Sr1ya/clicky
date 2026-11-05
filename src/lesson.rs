@@ -201,6 +201,12 @@ pub async fn synthesize_line(http_client: &reqwest::Client, config: &Config, tex
             Err(error) => log::warn!("ElevenLabs failed: {error:#}"),
         }
     }
+    if !config.fish_api_key.is_empty() {
+        match speech::synthesize_with_fish(http_client, &config.fish_api_key, &config.fish_tts_model, &config.fish_voice_id, text).await {
+            Ok(audio) => return Some(audio),
+            Err(error) => log::warn!("Fish Audio failed: {error:#}"),
+        }
+    }
     if !config.puter_auth_token.is_empty() {
         let settings = crate::puter::VoiceSettings {
             provider: &config.puter_tts_provider,
