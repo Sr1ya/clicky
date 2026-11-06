@@ -202,6 +202,8 @@ const session = {
   readouts: {},
   inTick: false,
   namedNext: null,
+  layout: null,
+  stepNumber: 0,
   byName: new Map(),
   papers: [],
   figures: [],
@@ -229,6 +231,7 @@ function push(mark, options) {
   mark.id = `m${session.marks.length}`;
   if (session.namedNext && !mark.name) { mark.name = session.namedNext; session.namedNext = null; }
   if (mark.name) session.byName.set(mark.name, mark.id);
+  session.layout.add(mark, session.stepNumber);
   session.marks.push(mark);
   if (session.stepHasLine) {
     mark.line = session.line;
@@ -293,6 +296,162 @@ const quietInk = (x, y) => (inPaper(x, y) ? TONES.grey : inkAt(x, y));
 const tone = (name, fallback) => TONES[name] || name || fallback;
 const realTone = (name, fallback) => REAL_TONES[name] || name || fallback;
 
+const shadeHex = (hex, k) => {
+  const match = /^#?([0-9a-f]{6})$/i.exec(String(hex));
+  if (!match) return hex;
+  const n = parseInt(match[1], 16);
+  const c = (v) => Math.round(v * (1 - k)).toString(16).padStart(2, "0");
+  return `#${c(n >> 16)}${c((n >> 8) & 255)}${c(n & 255)}`;
+};
+// A filled shape with no outline colour of its own gets a thin edge in a deeper shade of its fill.
+function outlined(options, inkFallback) {
+  const o = options || {};
+  const own = o.color || o.tone;
+  const style = styled(o, inkFallback);
+  if (style.fill && !own) {
+    style.color = shadeHex(style.fill, 0.32);
+    if (!o.size) style.size = 1.6;
+  }
+  return style;
+}
+
+// A paper window around its writing area, and the tones that follow the user's cursor colour.
+const WINDOW_HEADER = 28, WINDOW_PAD = 24;
+const BOARDS = new Set(["dots", "grid", "plain"]);
+const PAPER_TONES = { "#3380FF": "#EFF2F6", "#FF4C4C": "#F9EFEA", "#D4A017": "#FAF5EA", "#26C281": "#EFF4EB" };
+const PAPER_FILLS = { butter: "#FFE27A", mint: "#BFEFCF", peach: "#FFD0BC", lilac: "#D9D1FB", sky: "#CFE6FF" };
+const GEL_MIDS = { "#3380FF": "#A2C7FF", "#FF4C4C": "#FFB8B0", "#D4A017": "#FFDF8A", "#26C281": "#C9F0CF" };
+const textWidth = (words, size, style) => String(words).length * (size || 20) * (style === "title" ? 0.56 : 0.47);
+function openWindow(x, y, w, h, o) {
+  o = o || {};
+  const X = Math.max(2, x - WINDOW_PAD), Y = Math.max(2, y - WINDOW_PAD - WINDOW_HEADER);
+  const Wd = x + w + WINDOW_PAD - X, Hd = y + h + WINDOW_PAD - Y;
+  session.papers.push({ x: X, y: Y, w: Wd, h: Hd });
+  const title = o.title == null ? "" : String(o.title).replace(/\s+/g, " ").trim().slice(0, 60);
+  const board = BOARDS.has(o.board) ? o.board : o.grid === false ? "plain" : "grid";
+  push({ do: "window", at: [X, Y], w: Wd, h: Hd, header: WINDOW_HEADER, pad: WINDOW_PAD, inner: [x, y, w, h], title, board, role: "paper", color: o.color ? tone(o.color) : undefined });
+}
+function niceTicks(lo, hi) {
+  const span = hi - lo;
+  if (!(span > 0)) return [lo];
+  const rough = span / 5, power = 10 ** Math.floor(Math.log10(rough));
+  const unit = [1, 2, 2.5, 5, 10].find((k) => k * power >= rough) * power;
+  const out = [];
+  for (let v = Math.ceil(lo / unit) * unit; v <= hi + unit * 1e-6; v += unit) out.push(+v.toFixed(10));
+  return out;
+}
+
+// Boxes that carry words and land partly over another such box move to the nearest free spot,
+// and what was drawn in them comes along. One shape inside another, or just touching, stays.
+function newLayout() {
+  const containers = [], words = [], strokes = [], areas = [];
+  let moved = null;
+  const shapeOf = (m) => {
+    if (m.under) return null;
+    if (m.do === "rect" && Array.isArray(m.at) && finite(m.w) && finite(m.h)) {
+      let [x, y] = m.at, w = m.w, h = m.h;
+      if (w < 0) { x += w; w = -w; }
+      if (h < 0) { y += h; h = -h; }
+      return { kind: "box", b: [x, y, x + w, y + h], area: w * h, inside: (px, py) => px >= x && px <= x + w && py >= y && py <= y + h };
+    }
+    if ((m.do === "circle" || m.do === "ellipse") && Array.isArray(m.at)) {
+      const [cx, cy] = m.at, rx = +(m.r || m.rx), ry = +(m.r || m.ry);
+      if (!(rx > 0 && ry > 0)) return null;
+      return { kind: "round", b: [cx - rx, cy - ry, cx + rx, cy + ry], area: Math.PI * rx * ry, inside: (px, py) => ((px - cx) / rx) ** 2 + ((py - cy) / ry) ** 2 <= 1 };
+    }
+    if (m.do === "window" && Array.isArray(m.at)) {
+      const [x, y] = m.at, w = m.w, h = m.h;
+      return { kind: "poly", b: [x, y, x + w, y + h], area: w * h, inside: (px, py) => px >= x && px <= x + w && py >= y && py <= y + h };
+    }
+    return null;
+  };
+  const isContainer = (m, s) => s && s.b[2] - s.b[0] >= 36 && s.b[3] - s.b[1] >= 22 && s.area < 0.4 * session.W * session.H && (m.outline !== false || (m.fill && (m.fillAlpha == null || m.fillAlpha >= 0.5)));
+  const inter = (a, b, dx = 0, dy = 0) => {
+    const x0 = Math.max(a.b[0] + dx, b.b[0]), y0 = Math.max(a.b[1] + dy, b.b[1]), x1 = Math.min(a.b[2] + dx, b.b[2]), y1 = Math.min(a.b[3] + dy, b.b[3]);
+    if (x1 <= x0 || y1 <= y0) return 0;
+    const N = 14;
+    let hit = 0;
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      const px = x0 + ((i + 0.5) * (x1 - x0)) / N, py = y0 + ((j + 0.5) * (y1 - y0)) / N;
+      if (a.inside(px - dx, py - dy) && b.inside(px, py)) hit++;
+    }
+    return (hit / (N * N)) * (x1 - x0) * (y1 - y0);
+  };
+  const clash = (a, b, dx = 0, dy = 0) => {
+    const overlap = inter(a, b, dx, dy);
+    if (!overlap) return false;
+    const small = Math.min(a.area, b.area), big = Math.max(a.area, b.area);
+    if (overlap >= 0.8 * a.area || overlap >= 0.8 * b.area) return false;
+    if (overlap < 0.1 * small) return false;
+    return a.kind === b.kind && a.kind !== "poly" && small / big >= 0.2;
+  };
+  const within = (p, b, pad) => p[0] >= b[0] - pad && p[0] <= b[2] + pad && p[1] >= b[1] - pad && p[1] <= b[3] + pad;
+  const pointsOf = (m) => {
+    if (Array.isArray(m.pts)) return m.pts.filter(Array.isArray);
+    if (!Array.isArray(m.at)) return [];
+    if (m.do === "rect" || m.do === "highlight" || m.do === "image" || m.do === "window") return [m.at, [m.at[0] + (+m.w || 0), m.at[1] + (+m.h || 0)]];
+    if (m.do === "circle" || m.do === "ellipse") { const rx = +(m.r || m.rx) || 0, ry = +(m.r || m.ry) || 0; return [[m.at[0] - rx, m.at[1] - ry], [m.at[0] + rx, m.at[1] + ry]]; }
+    return [m.at];
+  };
+  const shift = (m, dx, dy, near) => {
+    const move = (p) => (!near || near(p) ? [p[0] + dx, p[1] + dy] : p);
+    if (Array.isArray(m.at)) m.at = move(m.at);
+    if (Array.isArray(m.pts)) m.pts = m.pts.map((p) => (Array.isArray(p) ? move(p) : p));
+  };
+  return {
+    reset() { containers.length = words.length = strokes.length = areas.length = 0; moved = null; },
+    add(m, step) {
+      if (m.do === "edit" || /3d$/.test(m.do || "") || m.role === "button") return;
+      if (moved) {
+        if (step !== moved.step) moved = null;
+        else {
+          const s = shapeOf(m), P = pointsOf(m);
+          if (isContainer(m, s) && !(within([s.b[0], s.b[1]], moved.from, 3) && within([s.b[2], s.b[3]], moved.from, 3))) moved = null;
+          else if (P.length && (m.do === "line" || m.do === "arrow")) shift(m, moved.d[0], moved.d[1], (p) => within(p, moved.from, 12));
+          else if (P.length && P.every((p) => within(p, moved.from, 3))) shift(m, moved.d[0], moved.d[1]);
+        }
+      }
+      if ((m.do === "line" || m.do === "arrow") && Array.isArray(m.pts)) { for (const p of m.pts) if (Array.isArray(p)) strokes.push(p); }
+      else if (m.do === "dot" && Array.isArray(m.at)) strokes.push(m.at);
+      if (m.do === "text" && Array.isArray(m.at) && m.text != null) {
+        const size = m.size || 20, wide = m.fit ? Math.min(m.fit[0], textWidth(m.text, size, m.style)) : textWidth(m.text, size, m.style);
+        const x = m.at[0] - (m.anchor === "middle" ? wide / 2 : m.anchor === "end" ? wide : 0);
+        const box = [x, m.at[1] - size * 0.8, x + wide, m.at[1] + size * 0.25];
+        words.push(box);
+        const cx = (box[0] + box[2]) / 2, cy = (box[1] + box[3]) / 2;
+        for (let k = containers.length - 1; k >= 0; k--) if (containers[k].inside(cx, cy)) { containers[k].labelled = true; break; }
+        return;
+      }
+      const s = shapeOf(m);
+      if (!isContainer(m, s)) return;
+      s.labelled = false;
+      const hit = containers.find((other) => other.labelled && clash(s, other));
+      if (hit) {
+        const box = (dx, dy) => [s.b[0] + dx, s.b[1] + dy, s.b[2] + dx, s.b[3] + dy];
+        const free = (dx, dy) => s.b[0] + dx >= 6 && s.b[1] + dy >= 6 && s.b[2] + dx <= session.W - 6 && s.b[3] + dy <= session.H - 6
+          && !containers.some((o) => (o.labelled && clash(s, o, dx, dy)) || (inter(s, o, dx, dy) > 0.12 * s.area && inter(s, o, dx, dy) < 0.8 * o.area))
+          && !strokes.some((p) => within(p, box(dx, dy), 4))
+          && !words.some((t) => Math.min(t[2], s.b[2] + dx) > Math.max(t[0], s.b[0] + dx) && Math.min(t[3], s.b[3] + dy) > Math.max(t[1], s.b[1] + dy));
+        const limit = 0.22 * Math.min(session.W, session.H), candidates = [];
+        for (let r = 8; r <= limit; r += 8) for (const [ux, uy] of [[0, 1], [1, 0], [-1, 0], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) candidates.push([ux * r, uy * r]);
+        candidates.push([hit.b[2] + 10 - s.b[0], 0], [hit.b[0] - 10 - s.b[2], 0], [0, hit.b[3] + 10 - s.b[1]], [0, hit.b[1] - 10 - s.b[3]]);
+        const best = candidates.filter((d) => Math.hypot(...d) <= limit * 1.1).sort((p, q) => Math.hypot(...p) - Math.hypot(...q)).find(([dx, dy]) => free(dx, dy));
+        if (best) {
+          const from = s.b.slice();
+          shift(m, best[0], best[1]);
+          s.b = box(best[0], best[1]);
+          const inside = s.inside;
+          s.inside = (px, py) => inside(px - best[0], py - best[1]);
+          moved = { from, d: best, step };
+        }
+      }
+      containers.push(s);
+    },
+  };
+}
+
+session.layout = newLayout();
+
 function styled(options, inkFallback) {
   const o = Object.assign({}, options);
   if (o.tone && !o.color) o.color = o.tone;
@@ -316,6 +475,7 @@ const api = {
   dist: (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]),
 
   step() {
+    session.stepNumber += 1;
     // A step with no line of its own joins the line before it.
     if (session.waiting.length) flushWaiting(session.line);
     session.stepHasLine = false;
@@ -334,12 +494,12 @@ const api = {
   line: (pts, o) => push({ do: "line", pts }, styled(o, inkAt(...firstPoint(pts)))),
   curve: (pts, o) => push({ do: "line", pts, smooth: true }, styled(o, inkAt(...firstPoint(pts)))),
   arrow: (pts, o) => push({ do: "arrow", pts }, styled(o, inkAt(...firstPoint(pts)))),
-  circle: (x, y, r, o) => push({ do: "circle", at: [x, y], r }, styled(o, inkAt(x, y))),
-  ellipse: (x, y, rx, ry, o) => push({ do: "ellipse", at: [x, y], rx, ry }, styled(o, inkAt(x, y))),
-  rect: (x, y, w, h, o) => push({ do: "rect", at: [x, y], w, h }, styled(o, inkAt(x, y))),
-  poly: (pts, o) => push({ do: "poly", pts }, styled(o, inkAt(...firstPoint(pts)))),
+  circle: (x, y, r, o) => push({ do: "circle", at: [x, y], r }, outlined(o, inkAt(x, y))),
+  ellipse: (x, y, rx, ry, o) => push({ do: "ellipse", at: [x, y], rx, ry }, outlined(o, inkAt(x, y))),
+  rect: (x, y, w, h, o) => push({ do: "rect", at: [x, y], w, h }, outlined(o, inkAt(x, y))),
+  poly: (pts, o) => push({ do: "poly", pts }, outlined(o, inkAt(...firstPoint(pts)))),
   path: (d, o) => push({ do: "path", d: String(d) }, styled(o, PAPER_INK)),
-  dot: (x, y, r, o) => push({ do: "dot", at: [x, y], r: finite(r) ? r : 4 }, styled(o, inkAt(x, y))),
+  dot: (x, y, r, o) => push({ do: "dot", at: [x, y], r: finite(r) ? r : 3 }, styled(o, inkAt(x, y))),
   text: (x, y, words, o) => push({ do: "text", at: [x, y], text: String(words == null ? "" : words) }, styled(o, inkAt(x, y))),
   write: (x, y, words, o) => api.text(x, y, words, o),
   highlight(a, b, c, d, o) {
@@ -381,8 +541,8 @@ const api = {
   },
   ink: (pts, o) => push({ do: (o && o.arrow) ? "arrow" : "line", pts, smooth: true }, Object.assign({ color: session.ink, size: 3.5, glow: true, taper: 0 }, o && o.color ? { color: tone(o.color) } : {}, o && o.bend ? { bend: o.bend } : {})),
   num(x, y, n, o) { return push({ do: "badge", at: [x, y], text: String(n) }, Object.assign({ color: session.ink }, o)); },
-  underline: (x, y, w, o) => push({ do: "line", pts: [[x, y + 4], [x + w, y + 4]] }, Object.assign({ color: session.ink, size: 3 }, o && styled(o, session.ink))),
-  strike: (x, y, w, o) => push({ do: "line", pts: [[x, y], [x + w, y]] }, styled(o, TONES.red)),
+  underline: (x, y, w, o) => push({ do: "line", pts: [[x, y + 3], [x + w, y + 3]] }, Object.assign({ color: session.ink, size: 3, taper: 0, glow: true, smooth: false, wobble: 0.3 }, o && styled(o, session.ink))),
+  strike: (x, y, w) => push({ do: "line", pts: [[x - 2, y], [x + w + 2, y]] }, { color: session.ink, size: 3, taper: 0, glow: true, smooth: false }),
   connect(a, b, o) {
     o = o || {};
     const mark = push({ do: "arrow", pts: [a, b], bend: finite(o.bend) ? o.bend : 0.2 }, { color: o.color ? tone(o.color) : session.ink, size: 3 });
@@ -395,11 +555,15 @@ const api = {
     if (o.label) { const p = firstPoint(pts); pillBeside([p[0] - 6, p[1] - 6, 12, 12], o.label); }
     return mark;
   },
-  check: (x, y, o) => push({ do: "line", pts: [[x, y], [x + 7, y + 8], [x + 21, y - 12]] }, styled(o, TONES.leaf)),
-  cross(x, y, o) {
-    const style = Object.assign(styled(o, TONES.red), { together: true });
-    push({ do: "line", pts: [[x - 8, y - 8], [x + 8, y + 8]] }, style);
-    return push({ do: "line", pts: [[x + 8, y - 8], [x - 8, y + 8]] }, styled(o, TONES.red));
+  check(x, y, size) {
+    const s = finite(size) ? size : 12;
+    return push({ do: "line", pts: [[x - s * 0.6, y], [x - s * 0.15, y + s * 0.5], [x + s * 0.7, y - s * 0.6]] }, { color: session.ink, size: 3.5, taper: 0, glow: true, smooth: false, role: "check" });
+  },
+  cross(x, y, size) {
+    const s = finite(size) ? size : 10;
+    const pen = { color: session.ink, size: 3.5, taper: 0, glow: true, role: "cross" };
+    push({ do: "line", pts: [[x - s / 2, y - s / 2], [x + s / 2, y + s / 2]] }, Object.assign({ together: true }, pen));
+    return push({ do: "line", pts: [[x + s / 2, y - s / 2], [x - s / 2, y + s / 2]] }, pen);
   },
   scroll(x, y, direction, name) {
     const s = direction === "up" ? -1 : 1;
@@ -410,59 +574,89 @@ const api = {
   spotlight: (x, y, w, h, o) => push({ do: "spotlight", at: [x, y], w, h }, o),
 
   // ---- paper
+  // paper's x, y, w, h is the writing area; the window stands around it.
   paper(x, y, w, h, o) {
     o = o || {};
     const box = stepAsideFromFigures(x, y, w, h);
     x = box[0]; y = box[1];
-    session.papers.push({ x, y, w, h });
-    const bar = 34, pad = 24;
-    push({ do: "window", at: [x, y], w, h, title: o.title ? String(o.title) : "", role: "paper", color: o.color ? tone(o.color) : undefined });
-    let cursor = y + bar + 8;
-    if (o.heading) { cursor += 30; push({ do: "text", at: [x + pad, cursor], text: String(o.heading), size: 30, weight: 700, color: PAPER_INK, fit: [w - 2 * pad, 80], role: "heading" }); }
-    if (o.subtitle) { cursor += 25; push({ do: "text", at: [x + pad, cursor], text: String(o.subtitle), size: 18, color: TONES.grey, fit: [w - 2 * pad, 60], role: "subtitle" }); }
-    return { x: x + pad, y: cursor + 18, w: w - 2 * pad, h: y + h - cursor - 18 - pad, box: [x, y, w, h], kind: "paper" };
+    const clean = (v) => (v == null ? "" : String(v).replace(/\s+/g, " ").trim());
+    const heading = clean(o.heading), subtitle = clean(o.subtitle);
+    const title = clean(o.title) || (heading.split(" ").length <= 5 ? heading : "");
+    openWindow(x, y, w, h, { title, board: o.board, grid: o.grid, color: o.color });
+    let top = y;
+    if (heading) {
+      push({ do: "text", at: [x, y + 20], text: heading, style: "title", size: 26, color: PAPER_INK, place: false, fit: [w, 34] });
+      top = y + 20 + 26 * 0.3;
+    }
+    if (subtitle) {
+      const baseline = heading ? y + 50 : y + 14;
+      push({ do: "text", at: [x, baseline], text: subtitle, size: 18, color: TONES.grey, place: false, fit: [w, 24] });
+      top = baseline + 18 * 0.3;
+    }
+    if (top > y) top += 32;
+    return { x, y: top, w, h: Math.max(40, y + h - top), box: [x, y, w, h], kind: "paper" };
   },
+  // A sticky lies a touch askew, with a soft shadow, a curled corner and a strip of tape.
   sticky(x, y, words, color, o) {
     o = o || {};
-    const fills = { butter: "#FFE27A", mint: "#BFEFCF", peach: "#FFD0BC", lilac: "#D9D1FB", sky: "#CFE6FF", white: "#FAF5EA" };
-    const w = finite(o.w) ? o.w : 220;
-    const h = finite(o.h) ? o.h : Math.max(90, 46 + Math.ceil(String(words).length / (w / 11)) * 26);
-    session.papers.push({ x, y, w, h });
-    push({ do: "rect", at: [x, y], w, h, r: 4, outline: false, fill: fills[color] || fills.butter, fillAlpha: 1, shadow: true, role: "paper", snd: "sticky-press", together: true });
-    return push({ do: "text", at: [x + 16, y + 34], text: String(words), size: 21, color: PAPER_INK, fit: [w - 32, h - 40] });
+    const size = o.size || 170, turn = (o.tilt ?? -2) * (Math.PI / 180);
+    const box = stepAsideFromFigures(x, y, size, size);
+    x = box[0]; y = box[1];
+    const middle = [x + size / 2, y + size / 2];
+    const tilted = (points) => points.map(([px, py]) => {
+      const dx = px - middle[0], dy = py - middle[1];
+      return [middle[0] + dx * Math.cos(turn) - dy * Math.sin(turn), middle[1] + dx * Math.sin(turn) + dy * Math.cos(turn)];
+    });
+    const sheet = [[x, y], [x + size, y], [x + size, y + size - 24], [x + size - 24, y + size], [x, y + size]];
+    const flat = { outline: false, wash: false, role: "paper" };
+    session.papers.push({ x, y, w: size, h: size });
+    push({ do: "poly", pts: tilted(sheet.map((p) => [p[0], p[1] + 3])), fill: TONES.ink, fillAlpha: 0.07, together: true, ...flat });
+    push({ do: "poly", pts: tilted(sheet.map((p) => [p[0], p[1] + 1])), fill: TONES.ink, fillAlpha: 0.08, together: true, ...flat });
+    push({ do: "poly", pts: tilted(sheet), fill: PAPER_FILLS[color] || tone(color, PAPER_FILLS.butter), fillAlpha: 1, snd: "paper-place", ...flat });
+    push({ do: "poly", pts: tilted([[x + size - 24, y + size], [x + size, y + size - 24], [x + size - 20, y + size - 20]]), fill: TONES.ink, fillAlpha: 0.12, together: true, ...flat });
+    const tapeW = size * 0.4, tapeH = 20, tapeX = x + size * 0.5 - tapeW / 2, tapeY = y + 1 - tapeH / 2;
+    const leftEnd = [], rightEnd = [];
+    for (let i = 0; i <= 4; i++) leftEnd.push([tapeX + (i % 2 ? 2.5 : 0), tapeY + (i * tapeH) / 4]);
+    for (let i = 0; i <= 4; i++) rightEnd.push([tapeX + tapeW - (i % 2 ? 0 : 2.5), tapeY + tapeH - (i * tapeH) / 4]);
+    push({ do: "poly", pts: tilted([...leftEnd.reverse(), ...rightEnd.reverse()]), fill: GEL_MIDS[session.ink] || session.ink, fillAlpha: 0.8, snd: "tape", ...flat });
+    return push({ do: "text", at: [x + 16, y + 40], text: String(words), style: "hand", size: o.textSize || 22, color: PAPER_INK, fit: [size - 32, size - 50], rot: o.tilt ?? -2, baseline: "alphabetic" });
   },
+  // A short list in a window, its title on top of the board.
   receipt(x, y, title, items, o) {
     o = o || {};
-    const rows = (items || []).map((item) => (Array.isArray(item) ? item : [item, ""]));
-    const w = finite(o.w) ? o.w : 300;
-    const h = 92 + rows.length * 28;
-    session.papers.push({ x, y, w, h });
-    push({ do: "rect", at: [x, y], w, h, r: 3, outline: false, fill: "#FAF5EA", fillAlpha: 1, shadow: true, role: "paper", snd: "paper-place" });
-    push({ do: "text", at: [x + w / 2, y + 38], text: String(title), size: 24, weight: 700, anchor: "middle", color: PAPER_INK });
-    push({ do: "line", pts: [[x + 16, y + 54], [x + w - 16, y + 54]], dash: true, size: 1.5, color: TONES.grey });
-    rows.forEach((row, index) => {
-      const rowY = y + 82 + index * 28;
-      push({ do: "text", at: [x + 18, rowY], text: String(row[0]), size: 19, color: PAPER_INK, together: true });
-      push({ do: "text", at: [x + w - 18, rowY], text: String(row[1]), size: 19, anchor: "end", color: PAPER_INK });
-    });
+    const rows = (items || []).map((item) => (Array.isArray(item) ? item.filter((cell) => cell !== "").join("  ") : String(item)));
+    const w = finite(o.w) ? o.w : 240, rowHeight = 30, h = 48 + rows.length * rowHeight;
+    const box = stepAsideFromFigures(x, y, w, h);
+    x = box[0]; y = box[1];
+    openWindow(x, y, w, h, { board: o.board || "plain", title: o.title });
+    push({ do: "text", at: [x, y + 24], text: String(title), style: "title", size: 20, color: PAPER_INK, fit: [w, 28] });
+    rows.forEach((row, index) => push({ do: "text", at: [x, y + 54 + index * rowHeight], text: `${index + 1}. ${row}`, style: "hand", size: 19, color: PAPER_INK, fit: [w, rowHeight] }));
     return { x, y, w, h, box: [x, y, w, h], kind: "paper" };
   },
-  clipping(x, y, w, title, body, source) {
-    const lines = Math.ceil(String(body || "").length / (w / 9));
-    const h = 92 + lines * 24 + (source ? 28 : 0);
-    session.papers.push({ x, y, w, h });
-    push({ do: "rect", at: [x, y], w, h, r: 2, outline: false, fill: "#F3EEE4", fillAlpha: 1, shadow: true, role: "paper", snd: "paper-place" });
-    push({ do: "text", at: [x + 18, y + 40], text: String(title), size: 28, weight: 700, color: PAPER_INK, fit: [w - 36, 76], font: "serif" });
-    push({ do: "text", at: [x + 18, y + 72], text: String(body || ""), size: 18, color: PAPER_INK, fit: [w - 36, lines * 26], font: "serif" });
-    if (source) push({ do: "text", at: [x + 18, y + h - 16], text: String(source), size: 15, color: TONES.grey });
+  // A fact in a window, its source in the title bar.
+  clipping(x, y, w, title, body, source, o) {
+    o = o || {};
+    const h = finite(o.h) ? o.h : 130;
+    const box = stepAsideFromFigures(x, y, w, h);
+    x = box[0]; y = box[1];
+    openWindow(x, y, w, h, { board: o.board || "plain", title: source || o.title });
+    push({ do: "text", at: [x, y + 24], text: String(title), style: "title", size: 20, color: PAPER_INK, fit: [w, 28] });
+    push({ do: "text", at: [x, y + 52], text: String(body || ""), style: "body", size: 17, color: TONES.grey, fit: [w, h - 56], baseline: "alphabetic" });
     return { x, y, w, h, box: [x, y, w, h], kind: "paper" };
   },
-  legend(x, y, items) {
-    (items || []).forEach((item, index) => {
-      const [color, words] = Array.isArray(item) ? item : [item.color, item.text];
-      push({ do: "rect", at: [x, y + index * 28 - 13], w: 18, h: 18, r: 4, fill: tone(color), fillAlpha: 1, outline: false, together: true });
-      push({ do: "text", at: [x + 28, y + index * 28], text: String(words), size: 19, color: inkAt(x + 28, y) });
-    });
+  // A row of colour keys, each a small dot and its words in grey. y is the words' baseline.
+  legend(x, y, items, o) {
+    o = o || {};
+    const size = o.size || 15, r = Math.max(3, Math.round(size * 0.3)), space = Math.round(size * 0.45), apart = Math.round(size * 1.3);
+    let cx = x;
+    for (const entry of items || []) {
+      const [color, words] = Array.isArray(entry) ? entry : [entry && (entry.tone || entry.color), entry && (entry.label || entry.text)];
+      if (!words) continue;
+      push({ do: "dot", at: [cx + r, y - size * 0.3], r, color: tone(color, TONES.grey), role: "key", together: true });
+      push({ do: "text", at: [cx + 2 * r + space, y], text: String(words), size, color: TONES.grey, place: false });
+      cx += 2 * r + space + String(words).length * size * 0.42 + apart;
+    }
+    return Math.max(0, cx - apart - x);
   },
   table(x, y, rows, o) {
     o = o || {};
@@ -523,41 +717,117 @@ const api = {
   handOff: () => warn("handOff isn't available on this desktop."),
 
   // ---- charts in data units
-  graph(x, y, w, h, o) {
+  graph(gx, gy, gw, gh, o) {
     o = o || {};
-    const xRange = o.x || [0, 10], yRange = o.y || [0, 10];
-    const left = x + 44, bottom = y + h - 34, plotW = w - 56, plotH = h - 50;
-    const toPx = (dx, dy) => [left + ((dx - xRange[0]) / (xRange[1] - xRange[0])) * plotW, bottom - ((dy - yRange[0]) / (yRange[1] - yRange[0])) * plotH];
-    const ink = tone(o.color, inkAt(x, y));
-    if (o.title) push({ do: "text", at: [x, y + 2], text: String(o.title), size: 22, weight: 700, color: ink });
-    push({ do: "arrow", pts: [[left, bottom], [left, bottom - plotH - 6]], size: 2.5, color: ink, together: true });
-    push({ do: "arrow", pts: [[left, bottom], [left + plotW + 6, bottom]], size: 2.5, color: ink });
-    if (o.xlabel) push({ do: "text", at: [left + plotW / 2, bottom + 28], text: String(o.xlabel), size: 17, anchor: "middle", color: quietInk(x, y) });
-    if (o.ylabel) push({ do: "text", at: [x + 4, bottom - plotH - 12], text: String(o.ylabel), size: 17, color: quietInk(x, y) });
-    const ticks = (range, count) => Array.from({ length: count + 1 }, (_, i) => range[0] + ((range[1] - range[0]) * i) / count);
-    if (o.ticks !== false) {
-      for (const value of ticks(xRange, 4)) { const [px] = toPx(value, yRange[0]); push({ do: "text", at: [px, bottom + 16], text: shortNumber(value), size: 13, anchor: "middle", color: quietInk(x, y), together: true }); }
-      for (const value of ticks(yRange, 4)) { const [, py] = toPx(xRange[0], value); push({ do: "text", at: [left - 6, py + 4], text: shortNumber(value), size: 13, anchor: "end", color: quietInk(x, y), together: true }); }
+    const xr = Array.isArray(o.x) ? o.x : [0, 10], yr = Array.isArray(o.y) ? o.y : [0, 10];
+    const X = (v) => gx + ((v - xr[0]) / (xr[1] - xr[0] || 1)) * gw, Y = (v) => gy + gh - ((v - yr[0]) / (yr[1] - yr[0] || 1)) * gh;
+    const at = (a, b) => (Array.isArray(a) ? [X(a[0]), Y(a[1])] : [X(a), Y(b)]);
+    const ink = tone(o.tone || o.color, inkAt(gx, gy));
+    const quiet = quietInk(gx, gy);
+    const axisY = yr[0] < 0 && yr[1] > 0 ? Y(0) : gy + gh, axisX = xr[0] < 0 && xr[1] > 0 ? X(0) : gx;
+    const short = (v) => shortNumber(v);
+    const ticksOf = (list, lo, hi) => (Array.isArray(list) ? list : list === true || o.ticks ? niceTicks(lo, hi) : []).map((t) => (Array.isArray(t) ? [t[0], String(t[1])] : [t, short(t)]));
+    const xt = ticksOf(o.xTicks, xr[0], xr[1]), yt = ticksOf(o.yTicks, yr[0], yr[1]);
+    if (o.title) push({ do: "text", at: [gx, gy - 34], text: String(o.title), style: "title", size: 22, color: ink });
+    if (o.grid) {
+      for (const [v] of xt) push({ do: "line", pts: [[X(v), gy], [X(v), gy + gh]], color: TONES.grey, size: 1.4, alpha: 0.4, smooth: false, together: true });
+      for (const [v] of yt) push({ do: "line", pts: [[gx, Y(v)], [gx + gw, Y(v)]], color: TONES.grey, size: 1.4, alpha: 0.4, smooth: false, together: true });
     }
-    return {
-      at: toPx,
-      curve(source, style) {
-        style = style || {};
-        const points = typeof source === "function"
-          ? Array.from({ length: 49 }, (_, i) => { const dx = xRange[0] + ((xRange[1] - xRange[0]) * i) / 48; return toPx(dx, source(dx)); })
-          : (source || []).map((p) => toPx(p[0], p[1]));
-        const mark = push({ do: "line", pts: points, smooth: typeof source === "function" || style.smooth === true }, { color: tone(style.color, TONES.blue), size: style.size || 3, dash: style.dash });
-        if (style.label) { const end = points[points.length - 1]; push({ do: "text", at: [end[0] + 6, end[1]], text: String(style.label), size: 18, color: mark.color }); }
-        return mark;
-      },
-      point(dx, dy, style) {
-        style = style || {};
-        const [px, py] = toPx(dx, dy);
-        const mark = push({ do: "dot", at: [px, py], r: style.r || 5, color: tone(style.color, TONES.red) });
-        if (style.label) push({ do: "text", at: [px + 10, py - 8], text: String(style.label), size: 18, color: ink });
-        return mark;
-      },
+    push({ do: "arrow", pts: [[Math.min(gx, axisX) - 6, axisY], [gx + gw + 12, axisY]], color: ink, size: 1.8, head: 8 });
+    push({ do: "arrow", pts: [[axisX, Math.max(gy + gh, axisY) + 6], [axisX, gy - 12]], color: ink, size: 1.8, head: 8 });
+    for (const [v, words] of xt) {
+      if (v === 0 && axisX === X(0)) continue;
+      push({ do: "line", pts: [[X(v), axisY - 4], [X(v), axisY + 4]], color: ink, size: 1.6, smooth: false, together: true });
+      push({ do: "text", at: [X(v), axisY + 22], text: words, anchor: "middle", size: 14, color: quiet });
+    }
+    for (const [v, words] of yt) {
+      if (v === 0 && axisY === Y(0)) continue;
+      push({ do: "line", pts: [[axisX - 4, Y(v)], [axisX + 4, Y(v)]], color: ink, size: 1.6, smooth: false, together: true });
+      push({ do: "text", at: [axisX - 9, Y(v) + 5], text: words, anchor: "end", size: 14, color: quiet });
+    }
+    const xLabel = o.xLabel || o.xlabel, yLabel = o.yLabel || o.ylabel;
+    if (xLabel) push({ do: "text", at: [gx + gw + 12, axisY + (xt.length ? 48 : 30)], text: String(xLabel), anchor: "end", size: o.labelSize || 18, color: ink });
+    if (yLabel) push({ do: "text", at: [axisX - 4, gy - 24], text: String(yLabel), size: o.labelSize || 18, color: ink });
+    const inRange = ([u, v]) => u >= xr[0] - 1e-9 && u <= xr[1] + 1e-9 && v >= Math.min(yr[0], yr[1]) - 1e-9 && v <= Math.max(yr[0], yr[1]) + 1e-9;
+    const leaving = (a, b) => {
+      let lo = 0, hi = 1;
+      for (let k = 0; k < 24; k++) { const m = (lo + hi) / 2; if (inRange([a[0] + (b[0] - a[0]) * m, a[1] + (b[1] - a[1]) * m])) lo = m; else hi = m; }
+      return [a[0] + (b[0] - a[0]) * lo, a[1] + (b[1] - a[1]) * lo];
     };
+    const series = (data, style, straight) => {
+      data = data.filter((p) => finite(p[0]) && finite(p[1]));
+      const pieces = [];
+      let current = [];
+      data.forEach((p, k) => {
+        if (inRange(p)) { if (!current.length && k && !inRange(data[k - 1])) current.push(leaving(p, data[k - 1])); current.push(p); }
+        else if (current.length) { current.push(leaving(data[k - 1], p)); pieces.push(current); current = []; }
+      });
+      if (current.length) pieces.push(current);
+      const color = tone(style.tone || style.color, TONES.blue), size = style.size || 4;
+      for (const piece of pieces) if (piece.length >= 2) push({ do: "line", pts: piece.map((p) => at(p)), color, size, smooth: straight ? false : undefined, dash: style.dash });
+      if (!pieces.length) warn("graph: a line lies completely outside the graph ranges");
+      const last = pieces.length ? pieces[pieces.length - 1] : data, first = pieces.length ? pieces[0] : data;
+      const end = at(last[last.length - 1] || [0, 0]), start = at(first[0] || [0, 0]);
+      if (style.label) {
+        const wide = textWidth(style.label, 18), atStart = style.labelAt === "start", p = atStart ? start : end;
+        let lx = p[0] + (atStart ? -8 : 8), ly = p[1] + 6, anchor = atStart ? "end" : "start";
+        if (!atStart && lx + wide > session.W - 8) { lx = p[0] - 4; ly = p[1] - 14; anchor = "end"; }
+        if (atStart && lx - wide < 8) { lx = p[0] + 4; ly = p[1] - 14; anchor = "start"; }
+        if (p[1] <= axisY && ly > axisY - 12) ly = p[1] - 12;
+        push({ do: "text", at: [lx, Math.max(22, Math.min(session.H - 8, ly))], text: String(style.label), anchor, size: style.labelSize || 18, color: tone(style.labelTone, color) });
+      }
+      return { data, color, size, straight, start, end, pts: data.map((p) => at(p)) };
+    };
+    const g = { box: { x: gx, y: gy, w: gw, h: gh }, origin: [axisX, axisY], x: X, y: Y, at };
+    g.plot = (f, style) => {
+      style = style || {};
+      if (typeof f === "function") {
+        const a = style.from != null ? style.from : xr[0], b = style.to != null ? style.to : xr[1], n = style.samples || 64, data = [];
+        for (let k = 0; k <= n; k++) { const u = a + ((b - a) * k) / n; let v; try { v = f(u); } catch (_) { v = NaN; } if (Number.isFinite(v)) data.push([u, v]); }
+        return series(data, style, false);
+      }
+      if (Array.isArray(f)) return series(f, style, style.smooth === true ? false : style.straight != null ? !!style.straight : f.length <= 8);
+      warn("graph: plot() needs a function or a list of [x, y] points");
+      return null;
+    };
+    g.curve = g.plot;
+    g.line = (p1, p2, style) => g.plot([p1, p2], Object.assign({ straight: true }, style));
+    g.shift = (line, dx, dy, style) => {
+      style = style || {};
+      if (!line || !line.data) { warn("graph: shift() needs a line made by plot() or line()"); return null; }
+      return series(line.data.map(([u, v]) => [u + (dx || 0), v + (dy || 0)]), Object.assign({ size: line.size, color: line.color }, style), line.straight);
+    };
+    g.cross = (a, b) => {
+      if (!a || !b || !a.data || !b.data) { warn("graph: cross() needs two lines"); return null; }
+      for (let i = 1; i < a.data.length; i++) for (let j = 1; j < b.data.length; j++) {
+        const p = a.data[i - 1], p2 = a.data[i], q = b.data[j - 1], q2 = b.data[j];
+        const r = [p2[0] - p[0], p2[1] - p[1]], s2 = [q2[0] - q[0], q2[1] - q[1]], den = r[0] * s2[1] - r[1] * s2[0];
+        if (Math.abs(den) < 1e-12) continue;
+        const t = ((q[0] - p[0]) * s2[1] - (q[1] - p[1]) * s2[0]) / den, u = ((q[0] - p[0]) * r[1] - (q[1] - p[1]) * r[0]) / den;
+        if (t >= -1e-9 && t <= 1 + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9) return [p[0] + r[0] * t, p[1] + r[1] * t];
+      }
+      warn("graph: these two lines do not cross inside the graph");
+      return null;
+    };
+    g.point = (a, b, style) => {
+      if (Array.isArray(a)) { style = b; b = a[1]; a = a[0]; }
+      style = style || {};
+      if (!finite(a) || !finite(b)) { warn("graph: point() got no point"); return null; }
+      const [cx, cy] = at(a, b);
+      const color = tone(style.tone || style.color, ink);
+      if (style.guides) {
+        push({ do: "line", pts: [[cx, cy], [cx, axisY]], color: TONES.grey, size: 2.4, dash: true, smooth: false, together: true });
+        push({ do: "line", pts: [[cx, cy], [axisX, cy]], color: TONES.grey, size: 2.4, dash: true, smooth: false, together: true });
+      }
+      push({ do: "dot", at: [cx, cy], r: style.r || 6.5, color });
+      if (style.xTick) push({ do: "text", at: [cx, axisY + 24], text: String(style.xTick), anchor: "middle", size: 16, color });
+      if (style.yTick) push({ do: "text", at: [axisX - 10, cy + 5], text: String(style.yTick), anchor: "end", size: 16, color });
+      if (style.label) push({ do: "text", at: [cx + 12, cy - 12], text: String(style.label), size: style.labelSize || 17, color });
+      const p = [cx, cy];
+      p.data = [a, b];
+      return p;
+    };
+    return g;
   },
   bars(x, y, w, h, rows, o) {
     o = o || {};
@@ -575,22 +845,44 @@ const api = {
       push({ do: "text", at: [barX + barW / 2, bottom + 20], text: String(row[0]), size: 16, anchor: "middle", color: quietInk(x, y) });
     });
   },
-  timeline(x, y, w, marks, o) {
+  // Dated marks along an arrow, words under them (or alternating), spread apart when too close.
+  timeline(tx, ty, tw, events, o) {
     o = o || {};
-    const list = marks || [];
-    const ink = inkAt(x, y);
-    const at = (value, index) => {
-      if (o.from !== undefined && finite(+value)) return x + ((+value - o.from) / (o.to - o.from)) * w;
-      return x + (list.length > 1 ? (index / (list.length - 1)) * w : w / 2);
+    const list = (Array.isArray(events) ? events : []).map((e, i) => (Array.isArray(e)
+      ? { date: e[0], label: e[1] == null ? "" : String(e[1]), show: e[2] }
+      : e && typeof e === "object" ? { date: e.date != null ? e.date : e.at != null ? e.at : i, label: String(e.label || e.text || ""), show: e.show } : { date: e, label: "" }));
+    const n = list.length, ink = tone(o.tone, inkAt(tx, ty)), quiet = quietInk(tx, ty);
+    push({ do: "arrow", pts: [[tx, ty], [tx + tw, ty]], color: ink, size: 2, head: 9 });
+    if (!n) { warn("timeline: no events"); return { marks: [], at: () => [tx, ty] }; }
+    const numeric = list.every((e) => finite(e.date));
+    const inset = o.inset != null ? o.inset : Math.min(60, tw / (2 * n)), span = tw - 2 * inset - 12;
+    const lo = numeric ? (o.from != null ? o.from : Math.min(...list.map((e) => e.date))) : 0;
+    const hi = numeric ? (o.to != null ? o.to : Math.max(...list.map((e) => e.date))) : n - 1;
+    const place = (d) => tx + inset + (n === 1 && !(o.from != null && o.to != null) ? span / 2 : ((d - lo) / (hi - lo || 1)) * span);
+    const xs = list.map((e, i) => (numeric && !o.even ? place(e.date) : tx + inset + (n === 1 ? span / 2 : (i * span) / (n - 1))));
+    const alternate = o.slots === "alternate";
+    const minGap = Math.min(o.minGap || (alternate ? 70 : 96), span / Math.max(1, n - 1));
+    const order = xs.map((_, i) => i).sort((a, b) => xs[a] - xs[b]);
+    for (let k = 1; k < n; k++) xs[order[k]] = Math.max(xs[order[k]], xs[order[k - 1]] + minGap);
+    for (let k = n - 1; k >= 0; k--) xs[order[k]] = Math.min(xs[order[k]], k === n - 1 ? tx + inset + span : xs[order[k + 1]] - minGap);
+    const room = (i) => {
+      const sorted = order.map((k) => xs[k]), k = sorted.indexOf(xs[i]);
+      const nearest = Math.min(k > 0 ? xs[i] - sorted[k - 1] : 1e9, k < n - 1 ? sorted[k + 1] - xs[i] : 1e9);
+      return nearest > 1e8 ? tw / 2 : nearest;
     };
-    push({ do: "arrow", pts: [[x - 10, y], [x + w + 22, y]], size: 2.5, color: ink });
-    list.forEach((item, index) => {
-      const [when, words] = Array.isArray(item) ? item : [item.at, item.text];
-      const px = at(when, index), above = index % 2 === 0;
-      push({ do: "dot", at: [px, y], r: 6, color: TONES.coral, together: true });
-      push({ do: "text", at: [px, y + (above ? -34 : 30)], text: String(when), size: 19, weight: 700, anchor: "middle", color: ink, together: true });
-      push({ do: "text", at: [px, y + (above ? -12 : 52)], text: String(words), size: 17, anchor: "middle", color: quietInk(x, y) });
+    const marks = list.map((e, i) => {
+      const x = xs[i], below = o.slots === "below" ? false : alternate ? i % 2 === 0 : true;
+      push({ do: "line", pts: [[x, ty - 9], [x, ty + 9]], color: ink, size: 3, smooth: false, together: true });
+      push({ do: "dot", at: [x, ty], r: 5.5, color: tone(o.dotTone, TONES.coral), together: true });
+      const shown = e.show != null ? String(e.show) : numeric ? shortNumber(e.date) : String(e.date);
+      const wide = Math.min(190, (alternate ? 1.85 : 0.96) * room(i));
+      const labelSize = o.labelSize || 17, dateSize = o.dateSize || 18;
+      const two = e.label && textWidth(e.label, labelSize) > wide - 6;
+      push({ do: "text", at: [x, below ? ty + 30 : ty - 18], text: shown, anchor: "middle", size: dateSize, color: tone(o.dateTone, ink), together: !!e.label });
+      if (e.label) push({ do: "text", at: [x, below ? ty + (two ? 64 : 56) : ty - (two ? 54 : 44)], text: e.label, anchor: "middle", size: labelSize, fit: [wide - 6, 44], color: ink === quiet ? ink : ink });
+      return { date: e.date, label: e.label, x, y: ty, at: [x, ty] };
     });
+    return { marks, at: (d) => { const k = list.findIndex((e) => e.date === d); return k >= 0 ? [xs[k], ty] : [tx, ty]; } };
   },
 
   // ---- changing what's already there. Ids are m3, m3-m9, p2 (a whole statement), a name or a handle.
@@ -601,6 +893,7 @@ const api = {
   scaleMark: (target, factor) => edit("scale", target, { factor }),
   undo: () => edit("undo", null),
   clear() {
+    session.layout.reset();
     for (const paper of session.papers) paper.erased = true;
     for (const mark of session.marks) mark.erased = true;
     session.figures.length = 0;
@@ -700,6 +993,7 @@ function edit(op, target, fields) {
 }
 
 // ---------------------------------------------------------------- 3D figures
+const MAJOR_PIPE_RADIUS = 0.08;
 const PLACE_KEYS = new Set(["at", "pos", "rot", "rotate", "scale", "parent", "name", "mat", "from", "to", "mirror", "copies", "around", "cut",
   "color", "roughness", "metalness", "opacity", "glow", "emissive", "double"]);
 const PART_KINDS = ["box", "cyl", "cylinder", "cone", "tube", "lathe", "sphere", "torus", "capsule", "pipe", "spring", "gear", "extrude", "blob", "poly"];
@@ -774,9 +1068,27 @@ function makeFigure(x, y, w, h, options) {
     return handle;
   };
 
+  // cut: true takes away the half facing the viewer. That half is on the +z side unless the
+  // figure starts turned to another side.
+  const startsFacingZ = ((Math.round((-20 + (finite(o.turn) ? o.turn : 0)) / 90) % 4) + 4) % 4 === 0;
+  let hasFacingCut = false;
+  // Pipes in a cutaway follow the cut, so none is left hanging in front of the opening: one
+  // crossing the slice is sliced, a big vessel entirely in front settles onto the slice, and
+  // a thin one on the removed front goes with the wall it ran on.
+  const followTheCut = (p, shape, pos) => {
+    if (p.cut !== undefined || p.parent || currentParent || !hasFacingCut || !startsFacingZ || !Array.isArray(shape.points)) return;
+    p.cut = true;
+    const r = finite(shape.r) ? shape.r : 0.1;
+    const depths = shape.points.filter((point) => Array.isArray(point) && finite(point[2])).map((point) => point[2] + pos[2]);
+    if (!depths.length || Math.min(...depths) - r < 0 || r < MAJOR_PIPE_RADIUS) return;
+    const middle = (Math.min(...depths) + Math.max(...depths)) / 2;
+    shape.points = shape.points.map((point) => (Array.isArray(point) ? [point[0], point[1], point[2] - middle] : point));
+  };
+
   const part = (kind, params) => {
     const p = Object.assign({}, params);
     const partId = `${stage}p${++partCount}`;
+    if (p.cut === true) hasFacingCut = true;
     const material = {};
     for (const key of ["roughness", "metalness", "opacity", "double"]) if (p[key] !== undefined) material[key] = p[key];
     if (p.color) material.color = realTone(p.color);
@@ -799,11 +1111,22 @@ function makeFigure(x, y, w, h, options) {
       const d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]], length = Math.hypot(...d);
       if (length > 1e-6) { pos = from.map((c, i) => (c + to[i]) / 2); shape.h = length; shape.axis = d.map((c) => c / length); }
     }
+    if (kind === "pipe") followTheCut(p, shape, pos);
+    // Given only by points, a pipe or arrow stands at their middle, so it grows in place and its
+    // label, picking and framing find it where it is rather than at the figure's origin.
+    if ((kind === "pipe" || kind === "arrow") && !vec3(p.at, null) && !vec3(p.pos, null) && Array.isArray(shape.points)) {
+      const points = shape.points.map((point) => vec3(point, null)).filter(Boolean);
+      if (points.length >= 2) {
+        const middle = [0, 1, 2].map((k) => points.reduce((sum, point) => sum + point[k], 0) / points.length);
+        shape.points = points.map((point) => point.map((value, k) => value - middle[k]));
+        pos = middle;
+      }
+    }
     const parent = (p.parent && p.parent.partId) || currentParent;
     const scale = vec3(p.scale, null) || (finite(p.scale) ? p.scale : undefined);
     const mark = push({
       do: "part3d", stage, partId, kind, shape, pos, rot, scale, material, parent,
-      name: typeof p.name === "string" && p.name.trim() ? p.name.trim().slice(0, 40) : undefined,
+      name: typeof p.name === "string" && p.name.trim() ? p.name.trim().slice(0, 40) : session.namedNext || undefined,
       copies: p.copies && typeof p.copies === "object" ? { count: Math.max(1, Math.min(200, +p.copies.count || 1)), step: vec3(p.copies.step, [0, 0, 0]), turn: p.copies.turn } : undefined,
       around: p.around && typeof p.around === "object" ? { count: Math.max(1, Math.min(200, +p.around.count || 1)), axis: axisOf(p.around.axis, [0, 1, 0]), center: vec3(p.around.center, [0, 0, 0]), arc: finite(p.around.arc) ? p.around.arc : 360 } : undefined,
       mirror: typeof p.mirror === "string" ? [p.mirror] : (Array.isArray(p.mirror) ? p.mirror.filter((m) => typeof m === "string") : undefined),

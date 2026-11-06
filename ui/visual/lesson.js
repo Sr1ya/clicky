@@ -19,9 +19,29 @@
   const OPEN_LINE_PACE_LIMIT = 1.3;// a line still being written may get more strokes
   const VOICE_WAIT_SECONDS = 15;   // draw anyway if the voice never arrives
   // ---- the pen
-  const PEN_POINTS_PER_SECOND = 600;
-  const PEN_MIN_SECONDS = 0.14;
-  const PEN_MAX_SECONDS = 0.7;
+  const PEN_POINTS_PER_SECOND = 1400;
+  const PEN_BASE_SECONDS = 0.25;
+  const PEN_MIN_SECONDS = 0.3;
+  const PEN_MAX_SECONDS = 1.4;
+  const DEFAULT_PEN_SIZE = 2.8;
+  const TEXT_LINE_HEIGHT = 1.3;
+  const MIN_TEXT_SIZE = 13;
+  // Larger fills skip the watercolour edge: costly while a stroke animates.
+  const WASH_MAX_AREA = 60000;
+  const WINDOW_HEADER = 28, WINDOW_RADIUS = 10;
+  const PILL_TEXT = 12, BADGE_TEXT = 13;
+  const UI_FONT = "system-ui, Inter, 'Noto Sans', sans-serif";
+  // A little of the user's cursor colour in the paper and the pills.
+  const PAPER_TONES = {
+    "#3380FF": "#EFF2F6", "#FF4C4C": "#F9EFEA", "#D4A017": "#FAF5EA", "#26C281": "#EFF4EB",
+  };
+  const GEL_TONES = {
+    "#3380FF": { top: "#EDF4FF", mid: "#A2C7FF", low: "#A2D2F7", rim: "#221898" },
+    "#FF4C4C": { top: "#FFF1EF", mid: "#FFB8B0", low: "#FFC8C0", rim: "#7A1E1E" },
+    "#D4A017": { top: "#FFF8E2", mid: "#FFDF8A", low: "#FFE9A8", rim: "#6E4E00" },
+    "#26C281": { top: "#EFFBF2", mid: "#C9F0CF", low: "#B4E8C5", rim: "#17603F" },
+  };
+  const WINDOW_TINTS = { "#D4A017": ["#FEEA3D", 0.12], "#3380FF": ["#0F7FFF", 0.08], "#FF4C4C": ["#FF5A4C", 0.08], "#26C281": ["#26C281", 0.1] };
   const SAMPLE_SPACING = 6;
   const WATCHDOG_SECONDS = 3;
   const PAPER_INK = "#30333A";
@@ -48,7 +68,7 @@
     for (let i = 1; i < (points || []).length; i++) total += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
     return total;
   }
-  const penSeconds = (length) => clamp(length / PEN_POINTS_PER_SECOND, PEN_MIN_SECONDS, PEN_MAX_SECONDS);
+  const penSeconds = (length) => clamp(PEN_BASE_SECONDS + length / PEN_POINTS_PER_SECOND, PEN_MIN_SECONDS, PEN_MAX_SECONDS);
 
   function naturalTiming(mark) {
     const timing = naturalTimingAlone(mark);
@@ -230,38 +250,119 @@
     return points;
   }
 
-  // A line a hand drew: wobbled along its normal, thicker in the middle than at its ends.
-  function handStroke(rawPoints, options) {
-    const { size = 3, taper = 1, wobble = 1, seed = 1 } = options;
-    const points = resample(rawPoints);
-    const n = points.length;
-    let total = 0;
-    const along = [0];
-    for (let i = 1; i < n; i++) { total += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]); along.push(total); }
-    const amplitude = Math.min(2.2, total * 0.012) * wobble;
-    const center = [], left = [], right = [];
-    for (let i = 0; i < n; i++) {
-      const before = points[Math.max(0, i - 1)], after = points[Math.min(n - 1, i + 1)];
-      let tx = after[0] - before[0], ty = after[1] - before[1];
-      const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
-      const shift = smoothNoise(along[i] * 0.014 + seed * 7.3) * amplitude * Math.min(1, along[i] / 18, (total - along[i]) / 18);
-      const px = points[i][0] - ty * shift, py = points[i][1] + tx * shift;
-      center.push([px, py]);
-      let half = size / 2;
-      if (taper) {
-        const entry = Math.min(1, along[i] / 16), exit = Math.min(1, (total - along[i]) / 22);
-        half *= (0.45 + 0.55 * entry) * (0.35 + 0.65 * exit) * (1 + 0.14 * smoothNoise(along[i] * 0.03 + seed));
-      }
-      left.push([px - ty * half, py + tx * half]);
-      right.push([px + ty * half, py - tx * half]);
+  // ---- the pen. Seeded, so the same drawing always wobbles the same way.
+  const seeded = (seed) => {
+    let state = 0;
+    for (const c of String(seed)) state = (state * 31 + c.charCodeAt(0)) >>> 0;
+    return () => ((state = (state * 1664525 + 1013904223) >>> 0) / 4294967296);
+  };
+  const gap = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const lengthOf = (points) => points.reduce((total, p, i) => (i ? total + gap(points[i - 1], p) : 0), 0);
+  const pathOf = (points) => `M${points.map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join("L")}`;
+  function finer(points, step = 6) {
+    const out = [points[0]];
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i], n = Math.max(1, Math.ceil(gap(a, b) / step));
+      for (let k = 1; k <= n; k++) out.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]);
     }
-    const fmt = (p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`;
-    return {
-      center: `M${center.map(fmt).join("L")}`,
-      outline: `M${left.map(fmt).join("L")}L${right.reverse().map(fmt).join("L")}Z`,
-      length: total,
-    };
+    return out;
   }
+  // Smooth through its points. A straight line stays straight: the hand shows in its width.
+  function smoothLine(points, closed) {
+    if (points.length < 2) return points.slice();
+    if (points.length === 2 && !closed) return finer(points, 12);
+    const P = closed ? [points[points.length - 1], ...points, points[0], points[1]] : [points[0], ...points, points[points.length - 1]];
+    const out = [];
+    for (let i = 1; i < P.length - 2; i++) {
+      const [p0, p1, p2, p3] = [P[i - 1], P[i], P[i + 1], P[i + 2]];
+      const n = clamp(Math.ceil(gap(p1, p2) / 4), 2, 30);
+      for (let k = 0; k < n; k++) {
+        const t = k / n, t2 = t * t, t3 = t2 * t;
+        out.push([0, 1].map((c) => 0.5 * (2 * p1[c] + (p2[c] - p0[c]) * t + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * t2 + (3 * p1[c] - p0[c] - 3 * p2[c] + p3[c]) * t3)));
+      }
+    }
+    out.push(closed ? points[0] : points[points.length - 1]);
+    return out;
+  }
+  // Straight edges drawn by hand each bow a little.
+  function handEdges(points, closed, random, amount = 1, style, jitter = 0) {
+    const unit = lesson.scale.x > 0 ? lesson.scale.x : 1;
+    const corners = jitter ? points.map((p) => [p[0] + ((random() * 2 - 1) * jitter) / unit, p[1] + ((random() * 2 - 1) * jitter) / unit]) : points;
+    const route = closed ? [...corners, corners[0]] : corners;
+    const out = [route[0]];
+    for (let i = 1; i < route.length; i++) {
+      const a = route[i - 1], b = route[i], length = gap(a, b), n = Math.max(2, Math.ceil(length / 5));
+      const inPoints = length * unit;
+      const penBow = inPoints < 24 ? inPoints * 0.03 : clamp(inPoints * 0.03, 2, 7);
+      const bow = style === "pen"
+        ? ((random() < 0.5 ? -1 : 1) * penBow * (0.6 + 0.4 * random()) * amount) / unit
+        : (random() - 0.5) * Math.min(3.2, length * 0.03) * amount;
+      const nx = -(b[1] - a[1]) / (length || 1), ny = (b[0] - a[0]) / (length || 1);
+      for (let k = 1; k <= n; k++) {
+        const t = k / n, push = Math.sin(Math.PI * t) * bow;
+        out.push([a[0] + (b[0] - a[0]) * t + nx * push, a[1] + (b[1] - a[1]) * t + ny * push]);
+      }
+    }
+    return out;
+  }
+  function handEllipse(cx, cy, rx, ry, turn, random, wobble = 1, overshoot = true) {
+    const n = Math.max(28, Math.round((rx + ry) / 2.2));
+    const start = random() * Math.PI * 2, span = Math.PI * 2 * (overshoot ? 1.06 : 1);
+    const p1 = random() * 6, p2 = random() * 6;
+    const out = [];
+    for (let i = 0; i <= n; i++) {
+      const a = start + (span * i) / n;
+      const k = 1 + wobble * (0.018 * Math.sin(a * 2 + p1) + 0.012 * Math.sin(a * 3 + p2)) + (overshoot ? (0.02 * wobble * i) / n : 0);
+      const x = Math.cos(a) * rx * k, y = Math.sin(a) * ry * k;
+      out.push([cx + x * Math.cos(turn) - y * Math.sin(turn), cy + x * Math.sin(turn) + y * Math.cos(turn)]);
+    }
+    return out;
+  }
+  // A felt pen's outline: a light taper into and out of the stroke, and a slight swell along it.
+  function feltOutline(points, size, taper = 1) {
+    const n = points.length;
+    if (n < 2) return null;
+    const along = [0];
+    for (let i = 1; i < n; i++) along.push(along[i - 1] + gap(points[i - 1], points[i]));
+    const total = along[n - 1] || 1, ramp = Math.min(total * 0.3, size * 5) * taper || 1e-6;
+    const left = [], right = [];
+    for (let i = 0; i < n; i++) {
+      const a = points[Math.max(0, i - 1)], b = points[Math.min(n - 1, i + 1)], d = gap(a, b) || 1;
+      const nx = -(b[1] - a[1]) / d, ny = (b[0] - a[0]) / d, u = along[i];
+      const press = Math.min(1, 0.35 + (0.65 * Math.min(u, total - u)) / ramp);
+      const half = (size / 2) * press * (0.94 + 0.06 * Math.sin(u / 7));
+      left.push([points[i][0] + nx * half, points[i][1] + ny * half]);
+      right.push([points[i][0] - nx * half, points[i][1] - ny * half]);
+    }
+    return `${pathOf(left)}L${pathOf(right.reverse()).slice(1)}Z`;
+  }
+  function dashPieces(points, on, off) {
+    const fine = finer(points, 2), out = [];
+    let run = 0, current = [fine[0]], drawing = true;
+    for (let i = 1; i < fine.length; i++) {
+      run += gap(fine[i - 1], fine[i]);
+      if (drawing) {
+        current.push(fine[i]);
+        if (run >= on) { out.push(current); drawing = false; run = 0; }
+      } else if (run >= off) { drawing = true; run = 0; current = [fine[i]]; }
+    }
+    if (drawing && current.length > 1) out.push(current);
+    return out;
+  }
+  const shadeHex = (hex, k) => {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex));
+    if (!m) return hex;
+    const n = parseInt(m[1], 16);
+    const c = (v) => Math.round(v * (1 - k)).toString(16).padStart(2, "0");
+    return `#${c(n >> 16)}${c((n >> 8) & 255)}${c(n & 255)}`;
+  };
+  const mixHex = (hex, other, t) => {
+    const channels = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const a = channels(hex), b = channels(other);
+    return `#${a.map((v, i) => Math.round(v + (b[i] - v) * t).toString(16).padStart(2, "0")).join("")}`;
+  };
+  const paperTone = () => PAPER_TONES[lesson.ink] || mixHex("#FAF5EA", lesson.ink, 0.05);
+  const gelTone = () => GEL_TONES[lesson.ink] || { top: mixHex(lesson.ink, "#FFFFFF", 0.9), mid: mixHex(lesson.ink, "#FFFFFF", 0.55), low: mixHex(lesson.ink, "#FFFFFF", 0.5), rim: mixHex(lesson.ink, "#000000", 0.55) };
 
   function bentPoints(points, bend) {
     if (!bend || points.length !== 2) return points;
@@ -288,6 +389,10 @@
     painted: new Map(),
     stages: new Map(),
     papers: [],
+    fills: [],
+    fillOrder: 0,
+    placedWords: [],
+    inkBoxes: [],
     buttons: [],
     tweens: [],
     animationFrame: 0,
@@ -308,6 +413,16 @@
     lesson.tweens.push({ start: now(), seconds, apply, ease: ease || ((t) => t) });
   }
 
+  // A fill's soft watercolour edge, and the blurred glow of a mark on the real screen.
+  function installFilters(defs) {
+    const wash = svg("filter", { id: "lesson-wash", x: "-10%", y: "-10%", width: "120%", height: "120%" });
+    wash.appendChild(svg("feTurbulence", { type: "fractalNoise", baseFrequency: 0.035, numOctaves: 2, seed: 3 }));
+    wash.appendChild(svg("feDisplacementMap", { in: "SourceGraphic", scale: 3.5 }));
+    const glow = svg("filter", { id: "lesson-glow", x: "-50%", y: "-50%", width: "200%", height: "200%", filterUnits: "objectBoundingBox" });
+    glow.appendChild(svg("feGaussianBlur", { stdDeviation: 6 }));
+    defs.append(wash, glow);
+  }
+
   function ensureLayers() {
     if (lesson.root) return;
     const root = document.createElement("div");
@@ -318,6 +433,7 @@
     stageLayer.className = "lesson-layer";
     const inkSvg = svg("svg", { class: "lesson-ink", preserveAspectRatio: "none" });
     const defs = svg("defs");
+    installFilters(defs);
     inkSvg.appendChild(defs);
     const labelSvg = svg("svg", { class: "lesson-ink" });
     const buttonLayer = document.createElement("div");
@@ -386,41 +502,62 @@
     }, easeInOut);
   }
 
-  function drawStroke(group, mark, rawPoints, seconds, options = {}) {
+  // White or near-black ink over the real screen wears a thin contrasting halo; a coloured
+  // screen mark wears a soft blurred glow of its own colour instead.
+  const INK_HALOS = {
+    "#FFFFFF": [["#080E1E", 0.16, 7], ["#080E1E", 0.45, 3]],
+    "#15171C": [["#FFFFFF", 0.35, 7], ["#FFFFFF", 0.85, 3]],
+  };
+  function drawStroke(group, mark, centre, seconds, options = {}) {
     const color = mark.color || PAPER_INK;
-    const size = mark.size || 3;
-    const seed = parseInt(mark.id.slice(1), 10) + 1;
-    const taper = mark.taper === 0 ? 0 : 1;
-    const stroke = handStroke(rawPoints, { size, taper, wobble: mark.wobble ?? (mark.glow ? 0.5 : 1), seed });
-    const dashed = mark.dash || options.dash;
-
+    const size = mark.size || DEFAULT_PEN_SIZE;
+    const taper = options.taper ?? (mark.taper == null ? 1 : mark.taper);
     const paint = svg("g");
-    const onPaper = rawPoints.length && inPaper(rawPoints[0][0], rawPoints[0][1]);
-    if (mark.glow) {
-      paint.appendChild(svg("path", { d: stroke.center, fill: "none", stroke: color, "stroke-opacity": 0.22, "stroke-width": size * 3.2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
-    } else if (!onPaper) {
-      paint.appendChild(svg("path", { d: stroke.center, fill: "none", stroke: haloColor(color), "stroke-width": size + 2.6, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+    const opacity = mark.alpha != null ? mark.alpha : 1;
+    const shape = (points, width, fill, fillOpacity) => (taper === 0
+      ? svg("path", { d: pathOf(points), fill: "none", stroke: fill, "stroke-width": width, "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-opacity": fillOpacity })
+      : svg("path", { d: feltOutline(points, width, taper), fill, "fill-opacity": fillOpacity }));
+    const dashed = mark.dash || options.dash;
+    const on = typeof dashed === "number" ? dashed : Math.max(8, size * 3);
+    const pieces = dashed ? dashPieces(centre, on, mark.dashGap || on * 0.75) : [centre];
+    const halo = !inPaper(centre[0][0], centre[0][1]) && INK_HALOS[String(color).toUpperCase()];
+    if (mark.glow && !halo) {
+      paint.appendChild(svg("path", { d: pathOf(centre), fill: "none", stroke: color, "stroke-opacity": 0.65, "stroke-width": size, "stroke-linecap": "round", "stroke-linejoin": "round", filter: "url(#lesson-glow)" }));
     }
-    if (dashed) {
-      paint.appendChild(svg("path", { d: stroke.center, fill: "none", stroke: color, "stroke-width": size, "stroke-dasharray": `${size * 3.2} ${size * 2.6}`, "stroke-linecap": "round" }));
-    } else if (taper) {
-      paint.appendChild(svg("path", { d: stroke.outline, fill: color, stroke: color, "stroke-width": 0.4 }));
-    } else {
-      paint.appendChild(svg("path", { d: stroke.center, fill: "none", stroke: color, "stroke-width": size, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+    for (const [haloColor, haloOpacity, haloWidth] of halo || []) {
+      for (const piece of pieces) paint.appendChild(svg("path", { d: pathOf(piece), fill: "none", stroke: haloColor, "stroke-opacity": haloOpacity, "stroke-width": haloWidth + size, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+    }
+    for (const piece of pieces) {
+      const drawn = shape(piece, size, color, opacity);
+      if (drawn.getAttribute("d")) paint.appendChild(drawn);
     }
     group.appendChild(paint);
-    revealByStroke(paint, stroke.center, stroke.length, size * 4 + 8, seconds);
-    return stroke;
+    revealByStroke(paint, pathOf(centre), lengthOf(centre), size * 2 + 4 + (mark.glow ? 30 : 0), seconds);
+    return centre;
   }
 
-  function fillIn(group, element, seconds) {
+  // A fill fades in a moment after its outline starts, with a soft uneven watercolour edge.
+  function fillIn(group, mark, d, area, seconds) {
+    const washed = mark.wash !== false && area <= WASH_MAX_AREA;
+    const alpha = mark.fillAlpha != null ? mark.fillAlpha : 1;
+    const element = svg("path", { d, fill: mark.fill, "fill-opacity": 0, filter: washed ? "url(#lesson-wash)" : undefined });
     group.insertBefore(element, group.firstChild);
-    const target = +(element.getAttribute("fill-opacity") ?? 1);
-    tween(Math.max(0.15, seconds * 0.8), (t) => element.setAttribute("fill-opacity", target * t), easeOutCubic);
+    const hold = mark.outline === false ? 0 : 0.18;
+    tween(0.35 + hold, (t) => element.setAttribute("fill-opacity", alpha * clamp((t * (0.35 + hold) - hold) / 0.35, 0, 1)), easeOutCubic);
+    if ((mark.role !== "paper" && alpha >= 0.08) || (mark.role === "paper" && alpha >= 0.99)) lesson.fills.push({ mark, order: ++lesson.fillOrder });
+    return element;
   }
-
-  function shapeFill(mark, d) {
-    return svg("path", { d, fill: mark.fill, "fill-opacity": mark.fillAlpha ?? 0.35 });
+  function boxOfMark(mark) {
+    if (mark.do === "rect") return [mark.at[0], mark.at[1], mark.at[0] + mark.w, mark.at[1] + mark.h];
+    if (mark.do === "circle" || mark.do === "ellipse") {
+      const rx = mark.r || mark.rx, ry = mark.r || mark.ry;
+      return [mark.at[0] - rx, mark.at[1] - ry, mark.at[0] + rx, mark.at[1] + ry];
+    }
+    if (mark.pts) {
+      const xs = mark.pts.map((p) => p[0]), ys = mark.pts.map((p) => p[1]);
+      return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    }
+    return null;
   }
 
   function popIn(group, cx, cy, seconds) {
@@ -432,45 +569,130 @@
   }
 
   function fontFamily(mark) {
-    return mark.font === "serif" ? "Georgia, 'Noto Serif', serif" : "Hand, sans-serif";
+    if (mark.font === "serif") return "Georgia, 'Noto Serif', serif";
+    return mark.style === "ui" ? UI_FONT : "Hand, sans-serif";
   }
+  const textWeight = (mark) => (mark.style === "title" ? 600 : mark.weight || 400);
 
-  function wrapLines(mark) {
-    const size = mark.size || 20;
+  function wrapLines(mark, size) {
     const hard = String(mark.text).split("\n");
-    if (!mark.fit || !mark.fit[0]) return hard;
+    const widest = mark.wrap || (mark.fit && mark.fit[0]);
+    if (!widest || hard.length > 1) return hard;
     const context = lesson.measure;
-    context.font = `${mark.weight >= 600 ? "700 " : ""}${size}px ${fontFamily(mark)}`;
+    context.font = `${textWeight(mark)} ${size}px ${fontFamily(mark)}`;
     const out = [];
-    for (const paragraph of hard) {
-      let line = "";
-      for (const word of paragraph.split(/\s+/)) {
-        const attempt = line ? `${line} ${word}` : word;
-        if (line && context.measureText(attempt).width > mark.fit[0]) { out.push(line); line = word; } else line = attempt;
-      }
-      out.push(line);
+    let line = "";
+    for (const word of hard[0].split(" ")) {
+      const attempt = line ? `${line} ${word}` : word;
+      if (line && context.measureText(attempt).width > widest) { out.push(line); line = word; } else line = attempt;
     }
+    out.push(line);
     return out;
+  }
+  // Words on a card keep clear of what's under them with a halo in the card's own colour.
+  function knockoutFor(mark) {
+    if (mark.under || mark.knockout === false || mark.role === "cheer") return null;
+    const [x, y] = mark.at;
+    const card = [...lesson.papers].reverse().find((paper) => paper.bg && x >= paper.x && x <= paper.x + paper.w && y >= paper.y && y <= paper.y + paper.h);
+    if (!card) return null;
+    let color = card.bg;
+    for (const { mark: filled } of lesson.fills) {
+      const b = boxOfMark(filled);
+      if (!b || x < b[0] || x > b[2] || y < b[1] || y > b[3] || !/^#[0-9a-f]{6}$/i.test(String(filled.fill))) continue;
+      const alpha = filled.fillAlpha != null ? filled.fillAlpha : 1;
+      color = alpha >= 0.99 ? filled.fill : mixHex(color, filled.fill, alpha);
+    }
+    return color;
+  }
+  // A short label steps off another label or a shape it landed on; a shape around it is its home.
+  function placeLabel(text, group, mark) {
+    if (mark.place === false || mark.under || text.querySelector("tspan")) { lesson.placedWords.push(text); return; }
+    const b = text.getBBox();
+    if (!b.width) return;
+    const boxOf = (element) => { try { const r = element.getBBox(); const n = element.lessonNudge || [0, 0]; return { x: r.x + n[0], y: r.y + n[1], w: r.width, h: r.height }; } catch (_) { return null; } };
+    const others = lesson.placedWords.filter((other) => other.isConnected).map(boxOf).filter(Boolean);
+    const shapes = lesson.inkBoxes.filter((entry) => entry.element.isConnected).map((entry) => entry.box);
+    const hitsWords = (dx, dy) => others.some((o) => Math.min(b.x + dx + b.width, o.x + o.w) - Math.max(b.x + dx, o.x) > 3
+      && Math.min(b.y + dy + b.height * 0.8, o.y + o.h * 0.8) - Math.max(b.y + dy + b.height * 0.2, o.y + o.h * 0.2) > 1);
+    const cover = (dx, dy) => {
+      const x0 = b.x + dx + b.width * 0.1, y0 = b.y + dy + b.height * 0.25, x1 = b.x + dx + b.width * 0.9, y1 = b.y + dy + b.height * 0.75;
+      let area = 0;
+      for (const o of shapes) {
+        if (o.x <= x0 + 2 && o.y <= y0 + 2 && o.x + o.w >= x1 - 2 && o.y + o.h >= y1 - 2) continue;
+        const ix = Math.min(x1, o.x - 4 + o.w + 8) - Math.max(x0, o.x - 4), iy = Math.min(y1, o.y - 4 + o.h + 8) - Math.max(y0, o.y - 4);
+        if (ix > 2 && iy > 2) area += ix * iy;
+      }
+      return area / Math.max(1, (x1 - x0) * (y1 - y0));
+    };
+    const hits = (dx, dy) => hitsWords(dx, dy) || cover(dx, dy) > 0.2;
+    const inside = (dx, dy) => b.x + dx >= 4 && b.y + dy >= 4 && b.x + dx + b.width <= lesson.width - 4 && b.y + dy + b.height <= lesson.height - 4;
+    let best = [0, 0];
+    if (!inside(0, 0)) best = [clamp(0, 4 - b.x, lesson.width - 4 - b.x - b.width), clamp(0, 4 - b.y, lesson.height - 4 - b.y - b.height)];
+    if (hits(best[0], best[1])) {
+      const step = Math.max(10, b.height * 0.9), candidates = [];
+      for (let k = 1; k <= 5; k++) {
+        for (const [ux, uy] of [[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [-1, 1], [1, -1], [-1, -1]]) candidates.push([best[0] + ux * k * (b.width * 0.35 + 6), best[1] + uy * k * step]);
+      }
+      candidates.sort((p, q) => Math.hypot(p[0] - best[0], (p[1] - best[1]) * 1.6) - Math.hypot(q[0] - best[0], (q[1] - best[1]) * 1.6));
+      const free = candidates.find(([dx, dy]) => inside(dx, dy) && !hits(dx, dy));
+      if (free) best = free;
+    }
+    if (best[0] || best[1]) {
+      text.lessonNudge = best;
+      text.setAttribute("transform", `translate(${best[0].toFixed(1)} ${best[1].toFixed(1)}) ${text.getAttribute("transform") || ""}`);
+    }
+    lesson.placedWords.push(text);
   }
 
   function drawText(group, mark, seconds) {
-    const size = mark.size || 20;
-    const lines = wrapLines(mark);
-    const leading = size * 1.22;
+    const style = mark.style || "hand";
+    let size = mark.size || (style === "title" ? 24 : style === "body" ? 17 : style === "caps" ? 14 : 20);
+    size = Math.max(size, style === "ui" ? 8 / (lesson.scale.x || 1) : MIN_TEXT_SIZE);
+    if (style === "caps") mark = Object.assign({}, mark, { text: String(mark.text).toUpperCase().split("").join("\u200A"), weight: mark.weight || 600 });
+    const leading = mark.lineHeight > 0.8 ? mark.lineHeight : TEXT_LINE_HEIGHT;
+    const lines = wrapLines(mark, size);
     const [x, y] = mark.at;
     const color = mark.color || PAPER_INK;
     const onPaper = inPaper(x, y);
+    const knockout = onPaper ? knockoutFor(mark) : null;
+    const haloWidth = Math.max(5, size * 0.45);
+    const lift = lines.length > 1 && (mark.fit || mark.wrap) && !mark.top && (mark.baseline || "auto") === "auto" ? ((lines.length - 1) * size * leading) / 2 : 0;
     const text = svg("text", {
-      x, y, fill: color, "font-size": size, "font-family": fontFamily(mark), "text-anchor": mark.anchor || "start",
-      "font-weight": mark.weight >= 600 ? 700 : 400,
+      x, y: y - lift, fill: color, "font-size": size, "font-family": fontFamily(mark), "text-anchor": mark.anchor || "start",
+      "font-weight": textWeight(mark),
+      transform: mark.rot ? `rotate(${mark.rot} ${x} ${y})` : undefined,
       stroke: onPaper ? undefined : haloColor(color), "stroke-width": onPaper ? undefined : Math.max(2.4, size * 0.13), "paint-order": onPaper ? undefined : "stroke", "stroke-linejoin": "round",
     });
     lines.forEach((line, index) => {
-      const span = svg("tspan", { x, dy: index ? leading : 0 });
+      const span = svg("tspan", lines.length > 1 ? { x, dy: index ? size * leading : 0 } : {});
       span.textContent = line;
       text.appendChild(span);
     });
     group.appendChild(text);
+    if (mark.fit) {
+      let fitted = size, box = text.getBBox();
+      while ((box.width > mark.fit[0] || box.height > mark.fit[1]) && fitted > Math.min(8, MIN_TEXT_SIZE)) {
+        fitted *= 0.92;
+        text.setAttribute("font-size", fitted.toFixed(1));
+        text.querySelectorAll("tspan").forEach((tspan, k) => { if (k) tspan.setAttribute("dy", fitted * leading); });
+        box = text.getBBox();
+      }
+    }
+    if (lines.length === 1 && text.firstChild) { text.firstChild.removeAttribute("x"); }
+    placeLabel(text, group, mark);
+    // The handwriting has one weight, so bold is drawn with a thin stroke of the words' own colour.
+    let halo = null;
+    if (knockout) {
+      halo = text.cloneNode(true);
+      halo.setAttribute("fill", knockout);
+      halo.setAttribute("stroke", knockout);
+      halo.setAttribute("stroke-width", haloWidth);
+      group.insertBefore(halo, text);
+    }
+    if (textWeight(mark) >= 600 && onPaper) {
+      text.setAttribute("stroke", color);
+      text.setAttribute("stroke-width", size * 0.035);
+    }
     // Handwriting wipes on left to right; words on several lines wipe as one.
     const bounds = text.getBBox();
     const id = `lesson-clip-${++lesson.maskCount}`;
@@ -479,26 +701,45 @@
     clip.appendChild(rect);
     lesson.defs.appendChild(clip);
     text.setAttribute("clip-path", `url(#${id})`);
+    if (halo) halo.setAttribute("clip-path", `url(#${id})`);
     tween(seconds, (t) => {
       rect.setAttribute("width", (bounds.width + 12) * t);
-      if (t >= 1) { text.removeAttribute("clip-path"); clip.remove(); }
+      if (t >= 1) { text.removeAttribute("clip-path"); if (halo) halo.removeAttribute("clip-path"); clip.remove(); }
     });
   }
 
+  // A pill in the user's cursor colour: a soft shadow, a dark rim, a low and a lighter band, a gloss.
+  function capsulePath(x, y, w, h) {
+    const r = h / 2;
+    return `M${x + r} ${y}H${x + w - r}A${r} ${r} 0 0 1 ${x + w - r} ${y + h}H${x + r}A${r} ${r} 0 0 1 ${x + r} ${y}Z`;
+  }
+  function capsuleTopPath(x, y, w, h, fraction) {
+    const r = h / 2, cutY = y + h * clamp(fraction, 0.02, 1);
+    const cut = Math.asin(clamp((cutY - y - r) / r, -1, 1));
+    const points = [];
+    for (let k = 0; k <= 10; k++) { const a = -Math.PI / 2 + ((cut + Math.PI / 2) * k) / 10; points.push([x + w - r + r * Math.cos(a), y + r + r * Math.sin(a)]); }
+    for (let k = 0; k <= 10; k++) { const a = Math.PI - cut + ((cut + Math.PI / 2) * k) / 10; points.push([x + r + r * Math.cos(a), y + r + r * Math.sin(a)]); }
+    return `${pathOf(points)}Z`;
+  }
+  function drawGel(group, x, y, w, h) {
+    const unit = lesson.scale.x || 1;
+    const tones = gelTone(), edge = 1 / unit, shine = Math.max(1.5 / unit, h * 0.09);
+    const layer = (d, fill, alpha) => group.appendChild(svg("path", { d, fill, "fill-opacity": alpha }));
+    layer(capsulePath(x, y + 1 / unit, w, h), "#1C1E24", 0.1);
+    layer(capsulePath(x - edge, y - edge, w + 2 * edge, h + 2 * edge), tones.rim, 1);
+    layer(capsulePath(x, y, w, h), tones.low, 1);
+    layer(capsuleTopPath(x, y, w, h, 0.78), tones.mid, 1);
+    layer(capsuleTopPath(x, y, w, h, 0.42), tones.top, 0.75);
+    layer(capsuleTopPath(x + shine, y + shine * 0.6, w - 2 * shine, h - 2 * shine, 0.5), "#FFFFFF", 0.6);
+  }
   function drawPill(group, mark) {
     const [x, y] = mark.at;
     const words = String(mark.text);
-    const size = 16;
-    lesson.measure.font = `${size}px Hand, sans-serif`;
-    const width = lesson.measure.measureText(words).width + 22;
-    const height = 27;
+    const size = PILL_TEXT / (lesson.scale.x || 1);
+    const width = Math.round(words.length * size * 0.58 + size * 1.9), height = Math.round(size * 1.9);
     const left = mark.anchor === "middle" ? x - width / 2 : x;
-    const color = mark.color || lesson.ink;
-    group.appendChild(svg("rect", { x: left + 1, y: y + 2, width, height, rx: height / 2, fill: "#10131a", "fill-opacity": 0.2 }));
-    group.appendChild(svg("rect", { x: left, y, width, height, rx: height / 2, fill: color, stroke: "#10131a", "stroke-opacity": 0.28 }));
-    group.appendChild(svg("rect", { x: left, y, width, height, rx: height / 2, fill: "#fff", "fill-opacity": 0.72 }));
-    group.appendChild(svg("rect", { x: left + 8, y: y + 2.5, width: width - 16, height: 8, rx: 4, fill: "#fff", "fill-opacity": 0.6 }));
-    const text = svg("text", { x: left + width / 2, y: y + height / 2 + size * 0.33, "text-anchor": "middle", "font-size": size, "font-family": "Hand, sans-serif", fill: "#15171C" });
+    drawGel(group, left, y, width, height);
+    const text = svg("text", { x: left + width / 2, y: y + height * 0.68, "text-anchor": "middle", "font-size": size, "font-family": UI_FONT, "font-weight": 600, fill: "#15171C" });
     text.textContent = words;
     group.appendChild(text);
     popIn(group, left + width / 2, y + height / 2, 0.26);
@@ -507,16 +748,30 @@
 
   function drawBadge(group, mark) {
     const [x, y] = mark.at;
-    const r = 14;
-    group.appendChild(svg("circle", { cx: x, cy: y, r: r + 2.5, fill: mark.color || lesson.ink, "fill-opacity": 0.25 }));
-    group.appendChild(svg("circle", { cx: x, cy: y, r, fill: mark.color || lesson.ink }));
-    const text = svg("text", { x, y: y + 6, "text-anchor": "middle", "font-size": 18, "font-family": "Hand, sans-serif", fill: "#fff", "font-weight": 700 });
+    const size = BADGE_TEXT / (lesson.scale.x || 1);
+    const height = Math.round(size * 1.9), width = Math.max(height, Math.round(String(mark.text).length * size * 0.58 + size * 1.1));
+    drawGel(group, x - width / 2, y - height / 2, width, height);
+    const text = svg("text", { x, y: y + height * 0.18, "text-anchor": "middle", "font-size": size, "font-family": UI_FONT, "font-weight": 600, fill: "#15171C" });
     text.textContent = mark.text;
     group.appendChild(text);
     popIn(group, x, y, 0.26);
     window.ClickySound?.play("pill-pop");
   }
 
+  // A window: a board in the paper's tone, a title bar with a wash of the cursor colour, and
+  // close and full-screen buttons that only show while the pointer is on the card.
+  function decorateWindow(element, bar, board) {
+    const tint = WINDOW_TINTS[lesson.ink] || [lesson.ink, 0.09];
+    const unit = lesson.scale.y;
+    element.style.setProperty("--board", paperTone());
+    element.style.setProperty("--tint", `${tint[0]}${Math.round(tint[1] * 255).toString(16).padStart(2, "0")}`);
+    element.style.setProperty("--radius", `${WINDOW_RADIUS * unit}px`);
+    if (board === "grid" || board === "dots") element.dataset.board = board;
+    element.style.setProperty("--grid", `${24 * unit}px`);
+    element.style.setProperty("--dots", `${16 * unit}px`);
+    element.style.setProperty("--dot", `${1.1 * unit}px`);
+    bar.style.fontSize = `${13 * unit}px`;
+  }
   function drawWindow(mark) {
     const { scale } = lesson;
     const element = document.createElement("div");
@@ -524,19 +779,18 @@
     Object.assign(element.style, {
       left: `${mark.at[0] * scale.x}px`, top: `${mark.at[1] * scale.y}px`, width: `${mark.w * scale.x}px`, height: `${mark.h * scale.y}px`,
     });
-    if (mark.color) element.style.background = mark.color;
     const bar = document.createElement("div");
     bar.className = "lesson-window-bar";
-    bar.style.height = `${34 * scale.y}px`;
-    bar.style.fontSize = `${15 * scale.y}px`;
-    bar.innerHTML = '<span class="lesson-dot"></span><span class="lesson-dot"></span><span class="lesson-dot"></span>';
+    bar.style.height = `${(mark.header || WINDOW_HEADER) * scale.y}px`;
     const title = document.createElement("span");
     title.className = "lesson-window-title";
     title.textContent = mark.title || "";
     bar.appendChild(title);
     element.appendChild(bar);
+    decorateWindow(element, bar, mark.board);
+    if (mark.bg) element.style.setProperty("--board", mark.bg);
     lesson.windowLayer.appendChild(element);
-    lesson.papers.push({ x: mark.at[0], y: mark.at[1], w: mark.w, h: mark.h, id: mark.id });
+    lesson.papers.push({ x: mark.at[0], y: mark.at[1], w: mark.w, h: mark.h, id: mark.id, bg: mark.bg || paperTone() });
     window.ClickySound?.play("paper-place");
     placeCloseButton();
     return element;
@@ -570,7 +824,9 @@
     button.className = "lesson-button";
     button.textContent = mark.text;
     button.style.setProperty("--ink", ink);
-    button.style.fontSize = `${17 * scale.y}px`;
+    button.style.fontSize = `${13 * scale.y}px`;
+    const tones = gelTone();
+    for (const [name, value] of Object.entries(tones)) button.style.setProperty(`--gel-${name}`, value);
     button.addEventListener("click", () => {
       const action = mark.action || {};
       if (action.ask) toRust({ type: "ask", text: action.ask });
@@ -619,6 +875,9 @@
       labelLayer: lesson.labelSvg,
       svgElement: svg,
       warn: (message) => console.warn(message),
+      ask: (text) => toRust({ type: "ask", text }),
+      decorateWindow,
+      paperTone,
     });
     lesson.stages.set(mark.stage, stage);
     placeCloseButton();
@@ -654,6 +913,7 @@
       case "tick3d":
         lesson.worker?.postMessage({ type: "tickStart", tickId: mark.tickId, now: now() });
         lesson.ticksRunning = true;
+        stageFor(mark.stage)?.ticksRunning(true);
         break;
       case "sound": window.ClickySound?.play(mark.name); break;
       case "edit": applyEdit(mark, seconds); break;
@@ -667,91 +927,120 @@
     }
   }
 
+  function noteShape(group, mark) {
+    if (mark.role === "paper" || mark.role === "tie") return;
+    try {
+      const r = group.getBBox();
+      if (r.width || r.height) lesson.inkBoxes.push({ element: group, box: { x: r.x, y: r.y, w: r.width, h: r.height } });
+    } catch (_) { /* not rendered yet */ }
+  }
   function paintInk(group, mark, seconds) {
+    const random = seeded(`${mark.id}`);
+    const size = mark.size || DEFAULT_PEN_SIZE;
     switch (mark.do) {
       case "line": {
-        const points = mark.smooth ? catmullRom(mark.pts) : mark.pts;
-        drawStroke(group, mark, bentPoints(points, mark.bend), seconds);
+        const centre = mark.smooth === false
+          ? handEdges(mark.pts, false, random, mark.wobble == null ? 0.6 : mark.wobble, mark.bow, mark.jitter)
+          : mark.bow === "pen" ? smoothLine(handEdges(mark.pts, false, random, mark.wobble == null ? 1 : mark.wobble, "pen", mark.jitter)) : smoothLine(mark.pts);
+        drawStroke(group, mark, centre, seconds, { taper: mark.dash && mark.taper !== 0 ? 0.3 : undefined });
+        noteShape(group, mark);
         return null;
       }
       case "arrow": {
-        const points = bentPoints(mark.smooth ? catmullRom(mark.pts) : mark.pts, mark.bend);
-        drawStroke(group, mark, points, seconds * 0.82);
-        // The head is two quick flicks after the shaft lands.
-        const end = points[points.length - 1];
-        let back = points[points.length - 2];
-        for (let i = points.length - 2; i >= 0; i--) { back = points[i]; if (Math.hypot(end[0] - back[0], end[1] - back[1]) > 10) break; }
-        const angle = Math.atan2(end[1] - back[1], end[0] - back[0]);
-        const size = mark.size || 3;
-        const headLength = clamp(size * 4.2, 11, 22);
-        const head = svg("g");
-        for (const spread of [-0.5, 0.5]) {
-          const tip = [end[0] - Math.cos(angle + spread) * headLength, end[1] - Math.sin(angle + spread) * headLength];
-          const d = handStroke([tip, end], { size, taper: 0, wobble: 0, seed: 1 });
-          head.appendChild(svg("path", { d: d.center, stroke: mark.color || PAPER_INK, "stroke-width": size, "stroke-linecap": "round", fill: "none" }));
+        let centre = mark.smooth === false ? handEdges(mark.pts, false, random, mark.wobble == null ? 0.6 : mark.wobble) : smoothLine(mark.pts);
+        if (mark.bend) {
+          const a = mark.pts[0], b = mark.pts[mark.pts.length - 1], length = gap(a, b) || 1;
+          let k = mark.bend === true ? 0.15 : Number(mark.bend) || 0;
+          if (Math.abs(k) > 1) k /= length;
+          k = clamp(k, -0.6, 0.6);
+          centre = smoothLine([a, [(a[0] + b[0]) / 2 - (b[1] - a[1]) * k, (a[1] + b[1]) / 2 + (b[0] - a[0]) * k], b]);
         }
+        const shaftSeconds = seconds * 0.8;
+        drawStroke(group, mark, centre, shaftSeconds);
+        // The head is one quick flick after the shaft lands.
+        const end = centre[centre.length - 1], back = centre[Math.max(0, centre.length - 6)];
+        const angle = Math.atan2(end[1] - back[1], end[0] - back[0]);
+        const length = mark.head || Math.max(9, size * 3), open = mark.headAngle || 0.5;
+        const barbs = [[end[0] - length * Math.cos(angle - open), end[1] - length * Math.sin(angle - open)], end, [end[0] - length * Math.cos(angle + open), end[1] - length * Math.sin(angle + open)]];
+        const head = svg("g", { opacity: 0 });
         group.appendChild(head);
-        head.setAttribute("opacity", 0);
-        tween(seconds, (t) => head.setAttribute("opacity", t >= 0.82 ? 1 : 0));
-        window.ClickySound?.play("pen-flick");
+        tween(seconds, (t) => {
+          if (t >= 0.8 && !head.childNodes.length) {
+            head.setAttribute("opacity", 1);
+            drawStroke(head, mark, barbs, Math.max(0.08, seconds * 0.2), { taper: mark.taper === 0 ? 0 : 0.4 });
+            window.ClickySound?.play("pen-flick");
+          }
+        });
+        if (mark.label) {
+          const middle = centre[Math.floor(centre.length / 2)];
+          const words = svg("text", { x: middle[0] + (mark.labelDx || 0), y: middle[1] - 8 + (mark.labelDy || 0), "text-anchor": "middle", fill: mark.color || PAPER_INK, "font-family": "Hand, sans-serif", "font-size": mark.labelSize || 15 });
+          words.textContent = mark.label;
+          group.appendChild(words);
+        }
+        noteShape(group, mark);
         return null;
       }
       case "circle": case "ellipse": {
         const rx = mark.r || mark.rx, ry = mark.r || mark.ry;
         const [cx, cy] = mark.at;
-        const seed = parseInt(mark.id.slice(1), 10);
-        const points = [];
-        // A hand's circle overshoots its start a little.
-        for (let i = 0; i <= 44; i++) {
-          const a = -Math.PI / 2 + (i / 40) * Math.PI * 2;
-          const swell = 1 + smoothNoise(i * 0.22 + seed) * 0.018;
-          points.push([cx + Math.cos(a) * rx * swell, cy + Math.sin(a) * ry * swell]);
-        }
-        if (mark.fill) fillIn(group, svg("ellipse", { cx, cy, rx, ry, fill: mark.fill, "fill-opacity": mark.fillAlpha ?? 0.35 }), seconds);
-        if (mark.outline !== false) drawStroke(group, mark, points, seconds);
+        const turn = (mark.rot || 0) * (Math.abs(mark.rot || 0) > 6.3 ? Math.PI / 180 : 1);
+        if (mark.fill) fillIn(group, mark, `${pathOf(handEllipse(cx, cy, rx, ry, turn, seeded(`f${mark.id}`), 0.5, false))}Z`, 4 * rx * ry, seconds);
+        if (mark.outline !== false) drawStroke(group, mark, handEllipse(cx, cy, rx, ry, turn, random, mark.wobble == null ? 1 : mark.wobble, true), seconds);
+        noteShape(group, mark);
         return null;
       }
       case "rect": {
         const [x, y] = mark.at;
         const w = mark.w, h = mark.h;
-        const points = roundedRectPoints(x, y, w, h, mark.r);
-        const d = `M${points.map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join("L")}Z`;
+        const rounded = clamp(mark.r || 0, 0, Math.min(Math.abs(w), Math.abs(h)) / 2);
+        const corners = rounded ? roundedRectPoints(x, y, w, h, rounded).slice(0, -1) : [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
         if (mark.fill) {
-          const fill = shapeFill(mark, d);
-          fillIn(group, fill, seconds);
+          const fill = fillIn(group, mark, `${pathOf(corners)}Z`, Math.abs(w * h), seconds);
           if (mark.shadow) {
-            group.insertBefore(svg("path", { d, transform: "translate(3 6)", fill: "#10131a", "fill-opacity": 0.24 }), fill);
+            group.insertBefore(svg("path", { d: `${pathOf(corners)}Z`, transform: "translate(3 6)", fill: "#10131a", "fill-opacity": 0.24 }), fill);
             lesson.papers.push({ x, y, w, h, id: mark.id });
           }
         }
-        if (mark.outline !== false) drawStroke(group, mark, points, seconds);
+        // A sharp box is closed by hand: the pen runs a little past where it started.
+        const route = rounded ? handEdges(corners, true, random, 1) : handEdges(corners.concat([[x, y], [x + Math.min(6, Math.abs(w) * 0.06), y + 1]]), false, random, 1);
+        if (mark.outline !== false) drawStroke(group, mark, route, seconds);
+        noteShape(group, mark);
         return null;
       }
       case "poly": {
-        const closed = mark.smooth ? catmullRom(mark.pts, true) : mark.pts.concat([mark.pts[0]]);
-        if (mark.fill) fillIn(group, shapeFill(mark, `M${closed.map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join("L")}Z`), seconds);
-        if (mark.outline !== false) drawStroke(group, mark, closed, seconds);
+        const closed = mark.close !== false;
+        const b = boxOfMark(mark);
+        if (mark.fill) fillIn(group, mark, `${pathOf(mark.smooth ? smoothLine(mark.pts, true) : mark.pts)}Z`, (b[2] - b[0]) * (b[3] - b[1]), seconds);
+        if (mark.outline !== false) {
+          drawStroke(group, mark, mark.smooth ? smoothLine(mark.pts, closed) : handEdges(mark.pts, closed, random, mark.wobble == null ? 0.7 : mark.wobble, mark.bow, mark.jitter), seconds);
+        }
+        noteShape(group, mark);
         return null;
       }
       case "path": {
-        const path = svg("path", { d: mark.d, fill: mark.fill || "none", "fill-opacity": mark.fillAlpha ?? 0.35, stroke: mark.color, "stroke-width": mark.size || 3, "stroke-linecap": "round", "stroke-linejoin": "round" });
+        const path = svg("path", { d: mark.d, fill: mark.fill || "none", "fill-opacity": mark.fillAlpha ?? 1, stroke: mark.outline === false ? "none" : mark.color, "stroke-width": size, "stroke-linecap": "round", "stroke-linejoin": "round" });
         group.appendChild(path);
         const length = path.getTotalLength();
-        revealByStroke(path, mark.d, length, (mark.size || 3) * 4 + 8, seconds);
+        revealByStroke(path, mark.d, length, size * 2 + 4, seconds);
+        noteShape(group, mark);
         return null;
       }
       case "dot": {
-        group.appendChild(svg("circle", { cx: mark.at[0], cy: mark.at[1], r: mark.r, fill: mark.color }));
-        popIn(group, mark.at[0], mark.at[1], 0.2);
+        group.appendChild(svg("circle", { cx: mark.at[0], cy: mark.at[1], r: mark.r || 3, fill: mark.color, "fill-opacity": mark.fillAlpha ?? 1 }));
+        popIn(group, mark.at[0], mark.at[1], 0.25);
         return null;
       }
       case "text": drawText(group, mark, seconds); return null;
       case "pill": drawPill(group, mark); return null;
       case "badge": drawBadge(group, mark); return null;
       case "highlight": {
-        const rect = svg("rect", { x: mark.at[0], y: mark.at[1], width: 0, height: mark.h, rx: 3, fill: mark.color, "fill-opacity": 0.42, style: "mix-blend-mode:multiply" });
-        group.appendChild(rect);
-        tween(seconds, (t) => rect.setAttribute("width", mark.w * t), easeInOut);
+        const [x, y] = mark.at, w = mark.w, h = mark.h;
+        const band = svg("path", {
+          d: `M${x} ${y + 2} Q${x + w / 2} ${y - 1} ${x + w} ${y + 1} L${x + w - 1} ${y + h} Q${x + w / 2} ${y + h + 2} ${x + 1} ${y + h - 1} Z`,
+          fill: mark.color, "fill-opacity": 0.72, style: "mix-blend-mode:multiply",
+        });
+        group.appendChild(band);
+        tween(0.35, (t) => band.setAttribute("transform", `translate(${x} 0) scale(${Math.max(0.001, t)} 1) translate(${-x} 0)`), easeOutCubic);
         window.ClickySound?.play("highlighter");
         return null;
       }
@@ -873,11 +1162,16 @@
       lesson.windowLayer.replaceChildren();
       lesson.inkSvg.replaceChildren(lesson.defs);
       lesson.defs.replaceChildren();
+      installFilters(lesson.defs);
       lesson.labelSvg.replaceChildren();
       lesson.buttonLayer.replaceChildren();
     }
     lesson.closeButton = null;
     lesson.papers = [];
+    lesson.fills = [];
+    lesson.fillOrder = 0;
+    lesson.placedWords = [];
+    lesson.inkBoxes = [];
     lesson.buttons = [];
     lesson.painted.clear();
     lesson.tweens = [];
@@ -994,6 +1288,8 @@
     // The watchdog ended the last program, so its variables are gone. What it drew
     // can't be built on, so the new turn starts on a clean canvas.
     if (lesson.workerDead) wipe();
+    // A new question is being answered, so what's on screen stops turning and faces front.
+    for (const stage of lesson.stages.values()) stage.holdStill();
     if (!lesson.worker) startWorker();
     if (lesson.pacer.queue.length) dropUndrawn();
     lesson.pacer.programDone = false;

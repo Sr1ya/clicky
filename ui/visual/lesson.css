@@ -11,47 +11,46 @@
 .lesson-window {
   position: absolute;
   box-sizing: border-box;
-  background: #fbf8f0;
-  border-radius: 12px;
-  border: 1px solid rgba(25, 28, 36, 0.14);
-  box-shadow: 0 16px 44px rgba(10, 14, 24, 0.32), 0 2px 7px rgba(10, 14, 24, 0.16);
+  background-color: var(--board, #fbf8f0);
+  border-radius: var(--radius, 10px);
+  border: 1px solid rgba(0, 0, 0, 0.42);
+  border-bottom-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(28, 30, 36, 0.1);
   overflow: hidden;
 }
-
+.lesson-window[data-board="grid"] {
+  background-image:
+    linear-gradient(to right, rgba(0, 0, 0, 0.055) 0.6px, transparent 0.6px),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.055) 0.6px, transparent 0.6px);
+  background-size: var(--grid, 24px) var(--grid, 24px);
+}
+.lesson-window[data-board="dots"] {
+  background-image: radial-gradient(circle, rgba(0, 0, 0, 0.2) var(--dot, 1.1px), transparent calc(var(--dot, 1.1px) + 0.4px));
+  background-size: var(--dots, 16px) var(--dots, 16px);
+}
 .lesson-window-bar,
 .lesson-stage-title {
   display: flex;
   align-items: center;
   gap: 6px;
   box-sizing: border-box;
-  padding: 0 12px;
-  color: #6c7079;
-  font-family: Hand, sans-serif;
+  padding: 0 40px;
+  color: rgba(0, 0, 0, 0.4);
+  font-family: system-ui, Inter, "Noto Sans", sans-serif;
+  font-weight: 600;
 }
-
 .lesson-window-bar {
-  background: #efeadf;
-  border-bottom: 1px solid rgba(25, 28, 36, 0.09);
+  background:
+    linear-gradient(var(--tint, transparent), var(--tint, transparent)),
+    linear-gradient(to right, #d6d5d7, #f0f0f0 50%, #d6d5d7);
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
-
 .lesson-stage-title {
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
+  top: 0; left: 0; right: 0;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.82);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
 }
-
-.lesson-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #d9d4c8;
-  flex: none;
-}
-
 .lesson-window-title {
   flex: 1;
   text-align: center;
@@ -59,7 +58,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
+.lesson-window.popping {
+  animation: lesson-pop 450ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
 .lesson-stage {
   position: absolute;
   pointer-events: auto;
@@ -101,19 +102,21 @@
 
 .lesson-button {
   position: absolute;
-  padding: 0.42em 0.95em;
-  border: 1.5px solid color-mix(in srgb, var(--ink) 72%, #10131a);
+  padding: 0.5em 1.1em;
+  border: 1px solid var(--gel-rim, #221898);
   border-radius: 999px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--ink) 18%, #fff), color-mix(in srgb, var(--ink) 42%, #fff));
+  background:
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.6) 0 28%, transparent 28%) content-box,
+    linear-gradient(to bottom, var(--gel-top, #edf4ff) 0 42%, var(--gel-mid, #a2c7ff) 42% 78%, var(--gel-low, #a2d2f7) 78%);
   color: #15171c;
-  font-family: Hand, sans-serif;
+  font-family: system-ui, Inter, "Noto Sans", sans-serif;
+  font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
   pointer-events: auto;
-  box-shadow: 0 5px 16px rgba(10, 14, 24, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.75);
-  animation: lesson-pop 260ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+  box-shadow: 0 1px 2px rgba(28, 30, 36, 0.25);
+  animation: lesson-pop 260ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
 }
-
 .lesson-button:hover {
   filter: brightness(1.05);
 }
@@ -132,9 +135,6 @@
   pointer-events: auto;
 }
 
-.lesson-window.popping {
-  animation: lesson-pop 380ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
-}
 
 @keyframes lesson-pop {
   from {

@@ -4,14 +4,14 @@
 All of this is drawn by a hand, stroke by stroke, in handwriting. Coordinates are canvas pixels. Colours: `ink white grey black butter yellow sun orange peach coral red pink lilac purple sky blue mint green brown tan cream`, or a `#RRGGBB`.
 
 **Paper** is a card you write on. Use it for explanations, on calm space.
-- `const a = paper(x, y, w, h, {title, heading, subtitle})` draws a little window. It returns `{x, y, w, h}`, the writing area under the heading. Lay out relative to it: `text(a.x, a.y + 24, "...")`. Allow about 110 px for a heading and subtitle.
-- `sticky(x, y, "words", "butter"|"mint"|"peach"|"lilac"|"sky")` is a short note.
-- `receipt(x, y, "Title", [["Item", "Cost"], ...])` is a totals or ingredients list.
-- `clipping(x, y, w, "Headline", "Body", "Source")` is a news cutting.
-- `legend(x, y, [["red", "Hot"], ["blue", "Cold"]])`, and `table(x, y, rows, {widths: [180, 120]})` whose first row is a header.
+- `const a = paper(x, y, w, h, {title, heading, subtitle, board: "grid"|"dots"|"plain"})` is a window whose writing area is exactly that rectangle. Its title bar and padding stand outside it (52 above, 24 on the other sides), so leave that room. It returns `{x, y, w, h}`, the area under the heading. Lay out relative to it: `text(a.x, a.y + 24, "...")`.
+- `sticky(x, y, "words", "butter"|"mint"|"peach"|"lilac"|"sky", {size: 170})` is a short note, a tilted square with tape.
+- `receipt(x, y, "Title", ["Item one", "Item two"], {w: 240})` is a short numbered list in a window.
+- `clipping(x, y, w, "Headline", "Body", "source.com", {h: 130})` is a fact in a window, its source in the title bar.
+- `legend(x, y, [["red", "Hot"], ["blue", "Cold"]])` is a row of colour keys (y is the baseline), and `table(x, y, rows, {widths: [180, 120]})` whose first row is a header.
 
 **Pen:**
-- `text(x, y, "words", {size, color, weight: 700, anchor: "middle"|"end", fit: [w, h]})` writes with y as the baseline. Size 15 to 20 for body, 24 to 34 for headings. `fit` wraps lines.
+- `text(x, y, "words", {size, color, style: "hand"|"title"|"body"|"caps", anchor: "middle"|"end", fit: [w, h], wrap: w})` writes with y as the baseline. `title` is bold (24), `body` is 17, `caps` is a small spaced-out name for a region (14), and the default is 20. Size 15 to 20 for body, 24 to 34 for headings. `fit` wraps and shrinks words to a box. A short label that lands on another label or a shape steps clear by itself; boxes that land partly over a labelled box move too, but plan for neither.
 - `line(pts, o)`, `curve(pts, o)` (smooth through the points), `arrow(pts, {color, size, bend: 0.2})`, `circle(x, y, r, o)`, `ellipse(x, y, rx, ry, o)`, `rect(x, y, w, h, {r, fill, fillAlpha, color, size, dash: true})`, `poly(pts, o)`, `path("M...", o)`, `dot(x, y, r, o)`.
 - `highlight(x, y, w, h, {color})` is a marker band over words.
 
@@ -30,9 +30,9 @@ All of this is drawn by a hand, stroke by stroke, in handwriting. Coordinates ar
 - `sources(x, y, [["nasa.gov", "NASA"], ...], {maxWidth})` is one quiet line of credits at the bottom of a card.
 
 **Charts**, in data units:
-- `const g = graph(x, y, w, h, {x: [0, 10], y: [0, 100], title, xlabel, ylabel})`, then `g.curve(t => t * t, {color, label})` or `g.curve([[0, 1], [2, 4]])`, and `g.point(3, 9, {label: "here"})`. `g.at(dx, dy)` gives pixels.
+- `const g = graph(x, y, w, h, {x: [0, 10], y: [0, 100], xLabel, yLabel, xTicks: true, yTicks: true, grid: true})`, where x, y, w, h are the plot itself. Then `const a = g.plot(t => t * t, {tone, label})` or `g.plot([[0, 1], [2, 4]])` (few points join straight, a function is smooth), `g.line([0, 1], [5, 5])`, `g.shift(a, 2, 0, {label})` moves a copy, `g.cross(a, b)` finds where two lines meet, and `g.point(3, 9, {label: "here", guides: true})`. `g.at(dx, dy)` converts data to pixels.
 - `bars(x, y, w, h, [["Mon", 12], ["Tue", 20]], {unit: "k"})`.
-- `timeline(x, y, w, [["1969", "Moon landing"], ["1972", "Last walk"]])`.
+- `timeline(x, y, w, [["1969", "Moon landing"], ["1972", "Last walk"]], {slots: "alternate", even: true})`. Numeric dates are spaced to scale.
 
 **Changing what's there,** as a line is heard:
 - `erase("p3,p4,m12-m20")`, `erase(someHandle)` or `erase("variableName")` removes things. `pN` is a whole statement from the on-screen list and `mN` is a single mark.
