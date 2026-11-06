@@ -58,6 +58,8 @@ pub struct Config {
     pub push_to_talk_trigger: String,
     /// The small sounds a lesson makes as it's drawn (paper landing, a part clicking in).
     pub drawing_sounds: bool,
+    /// Words of the current line along the bottom of the screen while Clicky talks.
+    pub voice_captions: bool,
 }
 
 impl Default for Config {
@@ -81,6 +83,7 @@ impl Default for Config {
             show_cursor_always: true,
             push_to_talk_trigger: DEFAULT_PUSH_TO_TALK_TRIGGER.into(),
             drawing_sounds: true,
+            voice_captions: true,
         }
     }
 }

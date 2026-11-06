@@ -160,6 +160,21 @@
       shader.uniforms.studioOcclusion = studio.occlusion;
       shader.uniforms.studioPixels = studio.pixels;
       shader.uniforms.studioShadowDirection = studio.shadowDirection;
+      const bands = material.userData.bands;
+      if (bands) {
+        shader.uniforms.studioBands = { value: Array.from({ length: 16 }, (_, i) => bands[i] || bands[bands.length - 1]) };
+        shader.uniforms.studioBandCount = { value: bands.length };
+        shader.uniforms.studioBandAxis = material.userData.bandAxis;
+        shader.uniforms.studioBandRange = material.userData.bandRange;
+        shader.vertexShader = shader.vertexShader
+          .replace("#include <common>", "#include <common>\nvarying float vStudioAlong;\nuniform vec3 studioBandAxis;")
+          .replace("#include <project_vertex>", "#include <project_vertex>\nvStudioAlong = dot(position, studioBandAxis);");
+        shader.fragmentShader = shader.fragmentShader
+          .replace("#include <common>", "#include <common>\nvarying float vStudioAlong;\nuniform vec3 studioBands[16];\nuniform int studioBandCount;\nuniform vec2 studioBandRange;")
+          .replace("#include <color_fragment>", `#include <color_fragment>
+        float bandAt = clamp((vStudioAlong - studioBandRange.x) / max(studioBandRange.y - studioBandRange.x, 1e-5), 0.0, 1.0);
+        diffuseColor.rgb *= studioBands[clamp(int(floor((1.0 - bandAt) * float(studioBandCount))), 0, studioBandCount - 1)];`);
+      }
       let declarations = `uniform sampler2D studioOcclusion;
         uniform vec2 studioPixels;
         uniform vec3 studioShadowDirection;
@@ -233,7 +248,7 @@
         );
       }
     };
-    material.customProgramCacheKey = () => `clicky-studio-${shadesOcclusion ? 1 : 0}${hatched ? 1 : 0}`;
+    material.customProgramCacheKey = () => `clicky-studio-${shadesOcclusion ? 1 : 0}${hatched ? 1 : 0}${material.userData.bands ? 1 : 0}`;
     return material;
   }
 
@@ -1493,12 +1508,18 @@
       const axis = resolveAxisAndRotation(mark);
       const doubleSided = ["lathe", "surface"].includes(mark.kind) || mark.shape.dome || mark.shape.thick > 0;
       const material = buildMaterial(mark.material, doubleSided);
+      if (mark.material.bands) {
+        material.userData.bands = mark.material.bands.map((color) => new THREE.Color(color));
+        material.userData.bandAxis = { value: new THREE.Vector3(0, 1, 0) };
+        material.userData.bandRange = { value: new THREE.Vector2(0, 1) };
+        if (!mark.material.color) material.color.set("#FFFFFF");
+      }
       const plane = mark.cut ? planeFor(mark.cut) : null;
       if (plane) material.clippingPlanes = [plane];
       // Glass and sheets marked double are seen through, so they aren't painted as a cut face.
       const cutFace = plane ? { plane, hatched: material.opacity >= 0.6 && !mark.material.double } : null;
       applyStudioShading(material, studio, cutFace);
-      if (mark.kind === "poly") material.flatShading = true;
+      if (mark.kind === "poly" || mark.material.flat) material.flatShading = true;
       entry.material = material;
 
       Promise.resolve(geometryFor(mark, axis)).then((geometry) => {
@@ -1506,6 +1527,14 @@
         entry.born = performance.now() / 1000;
         // A sculpted blob bakes its occlusion into vertex colours; the material carries the tint.
         material.vertexColors = !!geometry.attributes.color;
+        // Stripes run along the part's longest side, whichever way it was laid.
+        if (material.userData.bands) {
+          if (!geometry.boundingBox) geometry.computeBoundingBox();
+          const size = geometry.boundingBox.getSize(new THREE.Vector3());
+          const longest = size.y >= size.x && size.y >= size.z ? "y" : size.x >= size.z ? "x" : "z";
+          material.userData.bandAxis.value.set(longest === "x" ? 1 : 0, longest === "y" ? 1 : 0, longest === "z" ? 1 : 0);
+          material.userData.bandRange.value.set(geometry.boundingBox.min[longest], geometry.boundingBox.max[longest]);
+        }
         for (const node of nodes) {
           const mesh = new THREE.Mesh(geometry, material);
           mesh.castShadow = (material.opacity >= 0.6) && !(material.emissiveIntensity > 0.5);
@@ -1658,6 +1687,8 @@
         part: mark.follow ? parts.get(mark.follow) : null,
       });
       group.style.opacity = "0";
+      if (cardTransform) group.setAttribute("transform", cardTransform);
+      if (labelsHidden) group.style.display = "none";
       labelsNeedLayout = true;
     }
     function anchorOf(label) {
@@ -1910,6 +1941,7 @@
       }
     }
 
+    let cardScale = 1, cardTransform = "", labelsHidden = false;
     let labelClipCount = 0, labelsNeedLayout = false, lastLabelTime = performance.now() / 1000;
     const lesson3dTicks = { running: false };
     view.ink = mark.ink;
@@ -1935,7 +1967,7 @@
         view.swing = null;
       }
       if (dragging.moved) {
-        const tall = Math.max(1, objectRect.h);
+        const tall = Math.max(1, objectRect.h * cardScale);
         view.thetaDelta -= (Math.PI * 2 * dx) / tall;
         view.phiDelta -= (Math.PI * 2 * dy) / tall;
       }
@@ -1964,7 +1996,7 @@
     // Clicking a label or a part asks about it.
     function clickAt(event) {
       const bounds = canvas.getBoundingClientRect();
-      const x = event.clientX - bounds.left, y = event.clientY - bounds.top;
+      const x = ((event.clientX - bounds.left) * widthPx) / bounds.width, y = ((event.clientY - bounds.top) * heightPx) / bounds.height;
       const now = performance.now() / 1000;
       for (const label of labels) {
         if (!label.box || !labelShown(label)) continue;
@@ -2057,7 +2089,34 @@
 
     return {
       mark,
-      rect: () => [outer.x, outer.y, outer.w, outer.h],
+      element,
+      rect: () => {
+        const r = element.getBoundingClientRect();
+        return [r.left, r.top, r.width, r.height];
+      },
+      // Where its card has been dragged or zoomed to: canvas pixels, and a scale about the origin.
+      setCardTransform(dx, dy, k, tx, ty) {
+        cardScale = k;
+        element.style.transformOrigin = "0 0";
+        element.style.transform = `translate(${k * (outer.x + dx) + tx - outer.x}px, ${k * (outer.y + dy) + ty - outer.y}px) scale(${k})`;
+        cardTransform = `translate(${tx} ${ty}) scale(${k}) translate(${dx} ${dy})`;
+        for (const label of labels) label.group.setAttribute("transform", cardTransform);
+      },
+      // Out of sight while another card is shown big.
+      setHidden(hidden) {
+        element.style.opacity = hidden ? "0" : "";
+        for (const label of labels) label.group.style.display = hidden ? "none" : "";
+        labelsHidden = hidden;
+      },
+      // Keeps the picture sharp while the card is shown bigger.
+      setSharpness(k) {
+        renderer.setPixelRatio(Math.min(3, Math.min(window.devicePixelRatio || 1, QUALITY_LEVELS[qualityLevel].pixelRatio) * Math.max(1, k)));
+        renderer.setSize(widthPx, heightPx, false);
+        canvas.style.width = `${widthPx}px`;
+        canvas.style.height = `${heightPx}px`;
+        if (passes) passes.resize();
+        key.shadow.needsUpdate = true;
+      },
       addPart,
       addLabel,
       motion,

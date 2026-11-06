@@ -37,6 +37,11 @@ impl SpeechPlayer {
     }
 
     pub fn play_mp3(&self, mp3_bytes: Vec<u8>) {
+        if let Ok(mut state) = self.shared.lock()
+            && let Some(clips) = &mut state.speech_capture
+        {
+            clips.push((std::time::Instant::now(), mp3_bytes.clone()));
+        }
         set_playing(&self.shared, true);
         let _ = self.command_sender.send(PlayerCommand::PlayMp3(mp3_bytes));
     }

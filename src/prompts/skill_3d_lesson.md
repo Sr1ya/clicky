@@ -66,6 +66,8 @@ for (let i = 0; i < 7; i++) {
 
 **Materials, as real stuff:** `mat: "steel"`, `alu`, `titanium`, `chrome`, `brass`, `copper`, `gold`, `iron`, `black`, `rubber`, `glass`, `water`, `wood`, `ceramic`, `paper`, `plastic:#D8CBB2`, `paint:#167548`, `gloss:red`, `matte:#888`, `metal:#AA8855`, `soft:#9E3B35` for anything living, and `glow:#EE9A43` for a flame, an LED or a spark. Colours are what real things look like, so give a hex when it matters. Choose by what the thing is really made of: a mix of materials is what makes a model look real.
 
+A part can also take `bands: ["#C33", "#FFF", "#C33"]` for stripes along its longest side, top to bottom (a rocket's paint, a layered cake, rock strata), and `flat: true` for hard facets, which shows on shapes with few faces such as `poly` and `extrude`.
+
 **Showing the inside:**
 - `cut: true` on a casing slices away the half facing the viewer, through the figure's middle ([0, 0, 0]), and shows a hatched cut face. The slice stays fixed on the model, and the figure rocks gently instead of spinning all the way round. Use it on shells and put the working parts inside, uncut. Machines and bodies almost always want this.
 - Give a cut shell a wall with `thick` (`thick: 0.06`) or it reads as a solid hatched slab, and centre it on the figure's middle or the slice misses it.

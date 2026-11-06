@@ -42,6 +42,7 @@ const SCRIPT_MESSAGE_HANDLER: &str = "clicky";
 const HANDWRITING_FONT: &[u8] = include_bytes!("../ui/visual/PatrickHand.ttf");
 const LESSON_CSS: &str = include_str!("../ui/visual/lesson.css");
 const LESSON_SCRIPT: &str = include_str!("../ui/visual/lesson.js");
+const SMILES_SCRIPT: &str = include_str!("../ui/visual/smiles-drawer.min.js");
 const LESSON_WORKER_SCRIPT: &str = include_str!("../ui/visual/lesson_worker.js");
 const LESSON_SOUND_SCRIPT: &str = include_str!("../ui/visual/lesson_sound.js");
 const STAGE_SCRIPT: &str = include_str!("../ui/visual/stage3d.js");
@@ -87,6 +88,9 @@ pub enum VisualCommand {
         tiles: ScreenTiles,
         ink: &'static str,
         sounds: bool,
+        captions: bool,
+        /// Being recorded to a video: the on-screen controls stay out of the picture.
+        recording: bool,
         #[serde(skip)]
         monitor: MonitorGeometry,
     },
@@ -106,6 +110,12 @@ pub enum VisualCommand {
     LessonInterrupt,
     #[serde(rename = "lesson_photo")]
     LessonPhoto { id: String, data: String },
+    /// A picture of the card being pinned, or no data if it couldn't be taken.
+    #[serde(rename = "lesson_pinned")]
+    LessonPinned { data: String, width: f64, height: f64 },
+    /// Another app came to the front, or the desktop changed.
+    #[serde(rename = "lesson_screen_changed")]
+    LessonScreenChanged { reason: String },
 }
 
 impl VisualCommand {
@@ -116,7 +126,9 @@ impl VisualCommand {
             | VisualCommand::LessonEnd
             | VisualCommand::LessonLine { .. }
             | VisualCommand::LessonInterrupt
-            | VisualCommand::LessonPhoto { .. } => "clickyLesson",
+            | VisualCommand::LessonPhoto { .. }
+            | VisualCommand::LessonPinned { .. }
+            | VisualCommand::LessonScreenChanged { .. } => "clickyLesson",
             _ => "clicky",
         }
     }
@@ -290,7 +302,8 @@ fn create_visual_window(
 }
 
 /// Messages from the lesson player. Returns false for anything else. Opening a page
-/// and copying only ever come from the user pressing a button the program drew.
+/// and copying only ever come from the user pressing a button the program drew;
+/// typing and handing off happen as a line is heard, as the prompt lays down.
 fn handle_lesson_message(message: &str, shared: &Shared, companion_events: &UnboundedSender<CompanionEvent>) -> bool {
     let Ok(message) = serde_json::from_str::<Value>(message) else {
         return false;
@@ -324,6 +337,23 @@ fn handle_lesson_message(message: &str, shared: &Shared, companion_events: &Unbo
                     log::warn!("couldn't open {url}: {error}");
                 }
             }
+        }
+        "type_text" => {
+            let _ = companion_events.send(CompanionEvent::TypeText {
+                x: message["x"].as_f64().unwrap_or(0.0),
+                y: message["y"].as_f64().unwrap_or(0.0),
+                text: text("text"),
+            });
+        }
+        "handoff" => {
+            let _ = companion_events.send(CompanionEvent::HandOff { task: text("task"), label: text("label") });
+        }
+        "pin" => {
+            let number = |key: &str| message[key].as_f64().unwrap_or(0.0);
+            let _ = companion_events.send(CompanionEvent::PinCard { x: number("x"), y: number("y"), width: number("w"), height: number("h") });
+        }
+        "save_video" => {
+            let _ = companion_events.send(CompanionEvent::SaveVideo);
         }
         "copy" => {
             if let Err(error) = std::process::Command::new("wl-copy").arg("--").arg(text("text")).spawn() {
@@ -403,6 +433,8 @@ fn build_page_html() -> String {
     html.push_str(LESSON_SOUND_SCRIPT);
     html.push_str("</script><script>");
     html.push_str(STAGE_SCRIPT);
+    html.push_str("</script><script>");
+    html.push_str(SMILES_SCRIPT);
     html.push_str("</script><script>");
     html.push_str(LESSON_SCRIPT);
     html.push_str("</script></body></html>");

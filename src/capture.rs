@@ -87,8 +87,31 @@ pub async fn capture_all_screens(
         .await?
 }
 
+/// One frame of the whole desktop, for recording.
+pub async fn grab_frame() -> Result<image::RgbaImage> {
+    Ok(grab_with_kwin(true).await?.into_rgba8())
+}
+
+/// A picture of a rectangle of `monitor`, in its logical pixels, as a PNG data URL.
+pub async fn grab_region_png(monitors: &[MonitorGeometry], monitor: MonitorGeometry, x: f64, y: f64, width: f64, height: f64) -> Result<String> {
+    use base64::Engine;
+    let full_desktop = grab_with_kwin(true).await?;
+    let left = monitors.iter().map(|m| m.x).min().unwrap_or(0);
+    let top = monitors.iter().map(|m| m.y).min().unwrap_or(0);
+    let right = monitors.iter().map(|m| m.x + m.width).max().unwrap_or(1);
+    let pixels_per_unit = full_desktop.width() as f64 / (right - left).max(1) as f64;
+    let crop_x = ((monitor.x - left) as f64 + x).max(0.0) * pixels_per_unit;
+    let crop_y = ((monitor.y - top) as f64 + y).max(0.0) * pixels_per_unit;
+    let crop_width = (width * pixels_per_unit).round() as u32;
+    let crop_height = (height * pixels_per_unit).round() as u32;
+    let cropped = full_desktop.crop_imm(crop_x.round() as u32, crop_y.round() as u32, crop_width.max(1), crop_height.max(1));
+    let mut png = std::io::Cursor::new(Vec::new());
+    cropped.write_to(&mut png, image::ImageFormat::Png)?;
+    Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png.into_inner())))
+}
+
 async fn grab_full_desktop() -> Result<DynamicImage> {
-    match grab_with_kwin().await {
+    match grab_with_kwin(false).await {
         Ok(image) => return Ok(image),
         Err(error) => log::warn!("KWin ScreenShot2 failed ({error:#}), trying spectacle"),
     }
@@ -102,7 +125,7 @@ async fn grab_full_desktop() -> Result<DynamicImage> {
 /// KWin's own screenshot API: raw pixels streamed over a pipe, ~100 ms. KWin
 /// only serves apps whose .desktop file lists the interface in
 /// `X-KDE-DBUS-Restricted-Interfaces` (installed by desktop_integration).
-async fn grab_with_kwin() -> Result<DynamicImage> {
+async fn grab_with_kwin(with_our_windows: bool) -> Result<DynamicImage> {
     use std::collections::HashMap;
     use std::io::Read;
     use std::os::fd::AsFd;
@@ -121,6 +144,9 @@ async fn grab_with_kwin() -> Result<DynamicImage> {
     let options: HashMap<&str, Value> = HashMap::from([
         ("include-cursor", Value::from(false)),
         ("native-resolution", Value::from(true)),
+        // KWin leaves the caller's own windows out unless asked, which is what a lesson's
+        // screenshot wants and a recording of the lesson doesn't.
+        ("hide-caller-windows", Value::from(!with_our_windows)),
     ]);
     let connection = zbus::Connection::session().await?;
     let reply = tokio::time::timeout(

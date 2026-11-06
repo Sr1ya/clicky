@@ -3,6 +3,7 @@
 //! macOS app. All events (portal shortcut, D-Bus, panel button) funnel into
 //! one channel so they're handled strictly in order.
 
+use crate::actions;
 use crate::audio_input::MicrophoneRecorder;
 use crate::capture::{self, ScreenCapture};
 use crate::claude::{self, ClaudeReply, ConversationTurn, LabeledImage};
@@ -64,6 +65,14 @@ pub enum CompanionEvent {
     LessonPhoto { id: String, query: String },
     /// A lesson's `point()`: fly the buddy to this canvas pixel.
     PointAtCanvas { x: f64, y: f64 },
+    /// A lesson's `typeText()`: put words in the field at this canvas pixel.
+    TypeText { x: f64, y: f64, text: String },
+    /// A lesson's `handOff()`: start a job in a terminal the user can watch.
+    HandOff { task: String, label: String },
+    /// A card's pin button: take a picture of it to keep at the screen's edge.
+    PinCard { x: f64, y: f64, width: f64, height: f64 },
+    /// Replay the last lesson and save it as a video.
+    SaveVideo,
     /// Re-read config.toml (after `clicky puter-login` saved a token).
     ReloadConfig,
 }
@@ -205,6 +214,23 @@ impl Companion {
                         self.fly_to(&capture, x, y);
                     }
                 }
+                CompanionEvent::TypeText { x, y, text } => {
+                    let capture = self.shared.lock().unwrap().lesson_capture.clone();
+                    if let Some(capture) = capture {
+                        let (global_x, global_y) = pointing::screenshot_pixel_to_global(&capture, x, y);
+                        let shared = self.shared.clone();
+                        tokio::spawn(async move { actions::type_text(&shared, global_x, global_y, &text).await });
+                    }
+                }
+                CompanionEvent::HandOff { task, label } => actions::hand_off(&task, &label),
+                CompanionEvent::PinCard { x, y, width, height } => {
+                    let shared = self.shared.clone();
+                    tokio::spawn(async move { actions::pin_card(&shared, x, y, width, height).await });
+                }
+                CompanionEvent::SaveVideo => {
+                    let companion = self.clone();
+                    tokio::spawn(async move { companion.save_video().await });
+                }
                 CompanionEvent::PushToTalkToggled => unreachable!("mapped above"),
             }
         }
@@ -339,6 +365,40 @@ impl Companion {
         Ok(())
     }
 
+    /// Clears the screen, replays the last lesson while recording it, and saves the video.
+    async fn save_video(&self) {
+        let Some(reply) = dirs_cache_file("last_reply.txt").and_then(|path| std::fs::read_to_string(path).ok()) else {
+            actions::notify("No lesson to save yet");
+            return;
+        };
+        {
+            let mut state = self.shared.lock().unwrap();
+            if state.speech_capture.is_some() {
+                return;
+            }
+            state.speech_capture = Some(Vec::new());
+            state.lesson_on_screen = None;
+            state.visual_commands.push(VisualCommand::Clear { id: None });
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let recorder = match actions::VideoRecorder::start().await {
+            Ok(recorder) => recorder,
+            Err(error) => {
+                self.shared.lock().unwrap().speech_capture = None;
+                actions::notify(&format!("Couldn't record: {error:#}"));
+                return;
+            }
+        };
+        self.present_canned_reply(&reply).await;
+        // Let the last strokes land before the video stops.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let clips = self.shared.lock().unwrap().speech_capture.take().unwrap_or_default();
+        match recorder.finish(clips).await {
+            Ok(path) => actions::notify(&format!("Lesson saved to {}", path.display())),
+            Err(error) => actions::notify(&format!("Couldn't save the video: {error:#}")),
+        }
+    }
+
     /// Presents a canned reply through the same streaming path, delivered in
     /// small chunks like a real stream (`clicky present FILE`).
     async fn present_canned_reply(&self, reply_text: &str) {
@@ -442,6 +502,7 @@ impl Companion {
             let mut state = self.shared.lock().unwrap();
             state.lesson_events = Some(events_in);
             state.lesson_capture = Some(canvas_capture);
+            let recording = state.speech_capture.is_some();
             state.visual_commands.push(VisualCommand::LessonBegin {
                 width: capture.screenshot_width,
                 height: capture.screenshot_height,
@@ -450,6 +511,8 @@ impl Companion {
                 tiles: capture.tiles.clone(),
                 ink: LESSON_INK,
                 sounds: config.drawing_sounds,
+                captions: config.voice_captions,
+                recording,
                 monitor: capture.monitor,
             });
         }

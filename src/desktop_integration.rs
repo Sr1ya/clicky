@@ -38,6 +38,17 @@ impl ClickyBusService {
         }
     }
 
+    /// Called by the KWin script when another app comes to the front or the desktop changes.
+    fn screen_changed(&self, reason: String) {
+        crate::visual::send(&self.shared, crate::visual::VisualCommand::LessonScreenChanged { reason });
+    }
+
+    /// Where the cursor is, as "x,y". Lets scripts steer real mouse input.
+    fn cursor_position(&self) -> String {
+        let position = self.shared.lock().ok().and_then(|state| state.cursor_position);
+        position.map_or_else(String::new, |(x, y)| format!("{x},{y}"))
+    }
+
     fn press(&self) {
         let _ = self
             .companion_events
@@ -61,6 +72,11 @@ impl ClickyBusService {
     }
 
     /// Stop talking and clear the drawing (`clicky dismiss`).
+    /// `clicky save-video`: replays the last lesson and saves it as a video.
+    fn save_video(&self) {
+        let _ = self.companion_events.send(CompanionEvent::SaveVideo);
+    }
+
     fn dismiss(&self) {
         let _ = self.companion_events.send(CompanionEvent::Dismiss);
     }
@@ -178,6 +194,13 @@ workspace.cursorPosChanged.connect(function () {
     }
 });
 sendCursorPosition();
+function reportScreenChange(reason) {
+    callDBus("dev.clicky.Clicky", "/dev/clicky/Clicky", "dev.clicky.Clicky", "ScreenChanged", reason);
+}
+workspace.windowActivated.connect(function (window) {
+    if (window && !/^clicky/i.test(window.caption || "")) reportScreenChange("app switch");
+});
+workspace.currentDesktopChanged.connect(function () { reportScreenChange("space change"); });
 "#;
 
 pub async fn load_kwin_cursor_script(connection: &zbus::Connection) -> Result<()> {

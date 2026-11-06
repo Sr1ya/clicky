@@ -74,6 +74,8 @@ pub struct SharedState {
     pub next_visual_id: u64,
     /// The running program's reports go here while a lesson is being spoken.
     pub lesson_events: Option<UnboundedSender<LessonEvent>>,
+    /// While a lesson is being recorded: each spoken clip and when it started.
+    pub speech_capture: Option<Vec<(std::time::Instant, Vec<u8>)>>,
     /// What's on the canvas, as the sandbox lists it. `Some` while a drawing is up.
     pub lesson_on_screen: Option<String>,
     /// The screen the lesson is drawn on, to map canvas pixels onto the desktop.
@@ -100,6 +102,7 @@ pub fn new_shared(show_cursor_always: bool) -> Shared {
         cursor_tracking_status: "starting…".into(),
         visual_commands: Vec::new(),
         lesson_events: None,
+        speech_capture: None,
         lesson_on_screen: None,
         lesson_capture: None,
         next_visual_id: 1,

@@ -8,6 +8,7 @@
 //!   clicky press|release   explicit push-to-talk edges
 //!   clicky panel           open the settings panel
 
+mod actions;
 mod audio_input;
 mod capture;
 mod claude;
@@ -111,6 +112,13 @@ fn main() {
             }
             return;
         }
+        Some("save-video") => {
+            if let Err(error) = cli_runtime.block_on(desktop_integration::call_running_instance("SaveVideo")) {
+                eprintln!("Clicky isn't running ({error})");
+                std::process::exit(1);
+            }
+            return;
+        }
         Some("puter-login") => {
             std::process::exit(match cli_runtime.block_on(puter_login_from_cli()) {
                 Ok(()) => 0,
@@ -128,7 +136,7 @@ fn main() {
             });
         }
         Some(_) => {
-            println!("usage: clicky [toggle|press|release|dismiss|panel|point X Y|ask QUESTION|present FILE [--keep]|puter-login|selftest]");
+            println!("usage: clicky [toggle|press|release|dismiss|panel|point X Y|ask QUESTION|present FILE [--keep]|save-video|puter-login|selftest]");
             return;
         }
     };

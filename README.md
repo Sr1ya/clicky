@@ -163,3 +163,11 @@ gateways ignore `thinking: disabled`, and without the effort setting Sonnet
 - Figures run at about 25 fps here: GTK3 copies the WebKit surface every frame, and that cost
   dominates, not the GPU work. A smaller surface would help but isn't done yet.
 - No onboarding video or analytics (both were Mac-specific/remote services).
+
+## Cards, captions and saved lessons
+
+Hover a card for its close, pin and full-screen buttons, and drag its title bar to move it and everything drawn on it. A pinned card rests at the screen's edge and slides out under the pointer. Words of the current line show along the bottom while Clicky talks (`voice_captions = false` in `config.toml` turns them off).
+
+The ⤓ button by the close button, or `clicky save-video`, replays the last lesson and saves it with its voice to `~/Videos/Clicky`. The replay is spoken again, so it uses your text-to-speech allowance, and the picture is captured at about 8 to 10 frames a second.
+
+`typeText` needs `ydotoold` running, and `handOff` opens Claude Code in Konsole.

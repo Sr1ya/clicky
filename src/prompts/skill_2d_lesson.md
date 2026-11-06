@@ -29,6 +29,12 @@ All of this is drawn by a hand, stroke by stroke, in handwriting. Coordinates ar
 - `tie([x, y], photoBox)` is an arrow from a row of text to its picture.
 - `sources(x, y, [["nasa.gov", "NASA"], ...], {maxWidth})` is one quiet line of credits at the bottom of a card.
 
+**Chemistry:** `molecule("CC(=O)Oc1ccccc1C(=O)O", x, y, w, h)` draws a structure from its SMILES string. Use it whenever a real molecule is being discussed, and label it yourself.
+
+**Doing it for them,** only when they asked you to write, fill in or start something:
+- `typeText(x, y, "words")` puts words in the field at that spot as the line is heard. It never presses Return, and multi-line or non-English text goes on their clipboard instead, so say so.
+- `handOff({task: "...", label: "Short name"})` opens a coding agent in a terminal they can watch, working on that task. Only for a real job they asked for, with everything it needs written in the task.
+
 **Charts**, in data units:
 - `const g = graph(x, y, w, h, {x: [0, 10], y: [0, 100], xLabel, yLabel, xTicks: true, yTicks: true, grid: true})`, where x, y, w, h are the plot itself. Then `const a = g.plot(t => t * t, {tone, label})` or `g.plot([[0, 1], [2, 4]])` (few points join straight, a function is smooth), `g.line([0, 1], [5, 5])`, `g.shift(a, 2, 0, {label})` moves a copy, `g.cross(a, b)` finds where two lines meet, and `g.point(3, 9, {label: "here", guides: true})`. `g.at(dx, dy)` converts data to pixels.
 - `bars(x, y, w, h, [["Mon", 12], ["Tue", 20]], {unit: "k"})`.

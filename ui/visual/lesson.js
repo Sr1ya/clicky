@@ -84,6 +84,8 @@
       case "poly": dur = penSeconds(polylineLength((mark.pts || []).concat(mark.pts && mark.pts.length ? [mark.pts[0]] : []))); break;
       case "path": dur = 0.5; break;
       case "dot": return { dur: 0.25, adv: 0.06 };
+      case "act": return { dur: 0, adv: 0 };
+      case "molecule": return { dur: 0.6, adv: 0.4 };
       case "highlight": dur = 0.35; break;
       case "text": { const n = String(mark.text).length; return { dur: 0.4 + n * 0.015, adv: (0.35 + n * 0.012) * 0.7 }; }
       case "pill": case "badge": return { dur: 0.28, adv: 0.16 };
@@ -389,6 +391,16 @@
     painted: new Map(),
     stages: new Map(),
     papers: [],
+    cards: [],
+    dim: null,
+    pinning: null,
+    captions: false,
+    recording: false,
+    canSaveVideo: false,
+    lineTexts: {},
+    captionBar: null,
+    captionTimer: 0,
+    ignoreScreenUntil: 0,
     fills: [],
     fillOrder: 0,
     placedWords: [],
@@ -452,6 +464,21 @@
     const rects = [];
     for (const stage of lesson.stages.values()) rects.push(stage.rect());
     for (const button of lesson.buttons) rects.push([button.offsetLeft, button.offsetTop, button.offsetWidth, button.offsetHeight]);
+    for (const card of lesson.cards) {
+      const r = card.element.getBoundingClientRect();
+      rects.push([r.left, r.top, r.width, r.height]);
+    }
+    if (lesson.saveButton) rects.push([lesson.saveButton.offsetLeft, lesson.saveButton.offsetTop, lesson.saveButton.offsetWidth, lesson.saveButton.offsetHeight]);
+    if (lesson.cards.some((card) => card.isFull)) rects.push([0, 0, window.innerWidth, window.innerHeight]);
+    for (const item of document.getElementById("lesson-pinned")?.children || []) {
+      if (item.classList.contains("open")) {
+        const r = item.getBoundingClientRect();
+        rects.push([r.left, r.top, r.width, r.height]);
+      } else {
+        const scale = Math.min(150 / item.lessonW, 110 / item.lessonH, 1);
+        rects.push([window.innerWidth - 30, item.offsetTop, 30, item.lessonH * scale]);
+      }
+    }
     if (lesson.closeButton) {
       const close = lesson.closeButton;
       rects.push([close.offsetLeft, close.offsetTop, close.offsetWidth, close.offsetHeight]);
@@ -476,6 +503,20 @@
     if (top === Infinity) { right = window.innerWidth - 14; top = 44; }
     lesson.closeButton.style.left = `${clamp(right - 13, 8, window.innerWidth - 34)}px`;
     lesson.closeButton.style.top = `${clamp(top - 13, 8, window.innerHeight - 34)}px`;
+    lesson.closeButton.style.display = lesson.recording ? "none" : "";
+    if (lesson.canSaveVideo && !lesson.recording && !lesson.saveButton) {
+      const save = document.createElement("button");
+      save.className = "lesson-close lesson-save";
+      save.textContent = "⤓";
+      save.title = "save this lesson as a video";
+      save.addEventListener("click", () => toRust({ type: "save_video" }));
+      lesson.buttonLayer.appendChild(save);
+      lesson.saveButton = save;
+    }
+    if (lesson.saveButton) {
+      lesson.saveButton.style.left = `${clamp(right - 45, 8, window.innerWidth - 34)}px`;
+      lesson.saveButton.style.top = lesson.closeButton.style.top;
+    }
     reportInput();
   }
 
@@ -772,6 +813,270 @@
     element.style.setProperty("--dot", `${1.1 * unit}px`);
     bar.style.fontSize = `${13 * unit}px`;
   }
+  // ---- cards: a window and everything drawn on it move, grow, pin and close as one.
+  function addCard({ element, bar, box, stage, paperId }) {
+    const card = { element, bar, box, ownStage: stage || null, stages: stage ? [stage] : [], paperId, holders: new Set(), dx: 0, dy: 0, zoom: null };
+    if (!stage) {
+      // A figure standing on this paper belongs to it.
+      for (const other of lesson.stages.values()) if (!lesson.cards.some((c) => c.ownStage === other) && cardHolds(card, other)) card.stages.push(other);
+    }
+    const buttons = document.createElement("div");
+    buttons.className = "lesson-window-buttons";
+    for (const [kind, title, act] of [["close", "close", () => closeCard(card)], ["pin", "pin to the side", () => pinCard(card)], ["full", "full screen", () => toggleFullScreen(card)]]) {
+      const button = document.createElement("button");
+      button.className = `lesson-window-button ${kind}`;
+      button.title = title;
+      button.addEventListener("pointerdown", (event) => event.stopPropagation());
+      button.addEventListener("click", (event) => { event.stopPropagation(); act(); });
+      buttons.appendChild(button);
+    }
+    bar.appendChild(buttons);
+    let drag = null;
+    bar.style.cursor = "grab";
+    bar.addEventListener("pointerdown", (event) => {
+      if (card.zoom) return;
+      event.stopPropagation();
+      bar.setPointerCapture(event.pointerId);
+      const rect = element.getBoundingClientRect();
+      drag = {
+        x: event.clientX, y: event.clientY, dx: card.dx, dy: card.dy,
+        buttons: lesson.buttons.filter((b) => {
+          const cx = b.offsetLeft + b.offsetWidth / 2, cy = b.offsetTop + b.offsetHeight / 2;
+          return cx >= rect.left && cx <= rect.right && cy >= rect.top && cy <= rect.bottom + 40;
+        }).map((b) => ({ b, left: b.offsetLeft, top: b.offsetTop })),
+      };
+    });
+    bar.addEventListener("pointermove", (event) => {
+      if (!drag) return;
+      event.stopPropagation();
+      const moveX = event.clientX - drag.x, moveY = event.clientY - drag.y;
+      card.dx = drag.dx + moveX / lesson.scale.x;
+      card.dy = drag.dy + moveY / lesson.scale.y;
+      for (const { b, left, top } of drag.buttons) { b.style.left = `${left + moveX}px`; b.style.top = `${top + moveY}px`; }
+      applyCard(card);
+    });
+    const endDrag = (event) => {
+      if (!drag) return;
+      event.stopPropagation();
+      drag = null;
+      placeCloseButton();
+    };
+    bar.addEventListener("pointerup", endDrag);
+    bar.addEventListener("pointercancel", endDrag);
+    lesson.cards.push(card);
+    return card;
+  }
+  const cardHolds = (card, stage) => {
+    const { scale } = lesson;
+    const [x, y, w, h] = stage.rect();
+    const cx = (x + w / 2) / scale.x - card.dx, cy = (y + h / 2) / scale.y - card.dy;
+    return cx >= card.box.x && cx <= card.box.x + card.box.w && cy >= card.box.y && cy <= card.box.y + card.box.h;
+  };
+  // A mark belongs to the top card it was drawn on.
+  function joinCard(record) {
+    if (!record.holder || !lesson.cards.length) return;
+    let bounds;
+    try { bounds = record.holder.getBBox(); } catch (_) { return; }
+    if (!bounds.width && !bounds.height) return;
+    const cx = bounds.x + bounds.width / 2, cy = bounds.y + bounds.height / 2;
+    for (let i = lesson.cards.length - 1; i >= 0; i--) {
+      const card = lesson.cards[i];
+      if (cx >= card.box.x && cx <= card.box.x + card.box.w && cy >= card.box.y && cy <= card.box.y + card.box.h) {
+        card.holders.add(record.holder);
+        record.card = card;
+        applyCard(card, record.holder);
+        return;
+      }
+    }
+  }
+  function applyCard(card, onlyHolder) {
+    const { x: sx, y: sy } = lesson.scale;
+    const k = card.zoom ? card.zoom.k : 1, tx = card.zoom ? card.zoom.tx : 0, ty = card.zoom ? card.zoom.ty : 0;
+    const moved = card.dx || card.dy || card.zoom;
+    const transform = moved ? `translate(${tx} ${ty}) scale(${k}) translate(${card.dx} ${card.dy})` : null;
+    const place = (holder) => { if (transform) holder.setAttribute("transform", transform); else holder.removeAttribute("transform"); };
+    if (onlyHolder) { place(onlyHolder); return; }
+    card.holders.forEach(place);
+    if (!card.ownStage) {
+      const ex = card.box.x * sx, ey = card.box.y * sy;
+      card.element.style.transformOrigin = "0 0";
+      card.element.style.transform = moved ? `translate(${k * (ex + card.dx * sx) + tx * sx - ex}px, ${k * (ey + card.dy * sy) + ty * sy - ey}px) scale(${k})` : "";
+    }
+    for (const stage of card.stages) stage.setCardTransform(card.dx * sx, card.dy * sy, k, tx * sx, ty * sy);
+  }
+  // The other things on screen step back while one card is shown big.
+  function isolate(card, on) {
+    const faded = on ? "0" : "";
+    for (const other of lesson.cards) {
+      if (other === card) continue;
+      other.element.style.opacity = faded;
+      other.holders.forEach((holder) => { holder.style.opacity = faded; });
+      other.stages.forEach((stage) => stage.setHidden(on));
+    }
+    for (const stage of lesson.stages.values()) if (!card.stages.includes(stage) && !lesson.cards.some((c) => c.stages.includes(stage))) stage.setHidden(on);
+    for (const record of lesson.painted.values()) if (record.holder && !record.card) record.holder.style.opacity = faded;
+    for (const button of lesson.buttons) button.style.opacity = faded;
+    if (!lesson.dim) {
+      lesson.dim = document.createElement("div");
+      lesson.dim.className = "lesson-dim";
+      // Clicking anywhere off the big card puts it back.
+      lesson.dim.addEventListener("click", () => { const big = lesson.cards.find((c) => c.isFull); if (big) toggleFullScreen(big); });
+      lesson.windowLayer.prepend(lesson.dim);
+    }
+    lesson.dim.classList.toggle("shown", on);
+  }
+  function toggleFullScreen(card) {
+    const { x: sx, y: sy } = lesson.scale;
+    const from = card.zoom || { k: 1, tx: 0, ty: 0 };
+    let to;
+    if (card.zoom && card.zoom.k > 1.001 && card.isFull) {
+      to = { k: 1, tx: 0, ty: 0 };
+      card.isFull = false;
+      isolate(card, false);
+    } else {
+      const left = 64 / sx, top = 72 / sy, bottom = 64 / sy;
+      const roomW = lesson.width - 2 * left, roomH = lesson.height - top - bottom;
+      const k = Math.min(roomW / card.box.w, roomH / card.box.h, 3);
+      if (!(k > 0)) return;
+      const cx = card.box.x + card.dx + card.box.w / 2, cy = card.box.y + card.dy + card.box.h / 2;
+      to = { k, tx: left + roomW / 2 - k * cx, ty: top + roomH / 2 - k * cy };
+      card.isFull = true;
+      isolate(card, true);
+    }
+    for (const stage of card.stages) stage.setSharpness(to.k);
+    tween(0.35, (t) => {
+      card.zoom = { k: from.k + (to.k - from.k) * t, tx: from.tx + (to.tx - from.tx) * t, ty: from.ty + (to.ty - from.ty) * t };
+      if (t >= 1 && to.k === 1) card.zoom = null;
+      applyCard(card);
+      if (t >= 1) reportInput();
+    }, easeOutCubic);
+  }
+  function removeCard(card) {
+    lesson.cards = lesson.cards.filter((other) => other !== card);
+    card.holders.forEach((holder) => holder.remove());
+    for (const stage of card.stages) {
+      for (const [id, entry] of lesson.stages) if (entry === stage) { stage.dispose(); lesson.stages.delete(id); }
+    }
+    if (!card.ownStage) card.element.remove();
+    if (card.paperId !== undefined) lesson.papers = lesson.papers.filter((paper) => paper.id !== card.paperId);
+    if (card.isFull) isolate(card, false);
+    placeCloseButton();
+  }
+  function closeCard(card) {
+    card.element.style.transition = "opacity 180ms";
+    card.element.style.opacity = "0";
+    card.holders.forEach((holder) => { holder.style.transition = "opacity 180ms"; holder.style.opacity = "0"; });
+    setTimeout(() => {
+      removeCard(card);
+      const anythingLeft = lesson.cards.length || [...lesson.painted.values()].some((record) => record.holder && record.holder.isConnected && !record.card && record.mark.role !== "button");
+      if (!anythingLeft) toRust({ type: "dismiss" });
+    }, 190);
+  }
+  // Pinned: a picture of the card rests at the screen's edge, and slides out under the pointer.
+  function pinCard(card) {
+    if (lesson.pinning) return;
+    lesson.pinning = card;
+    card.element.classList.add("lesson-being-pinned");
+    setTimeout(() => {
+      const rect = card.element.getBoundingClientRect();
+      toRust({ type: "pin", x: rect.left, y: rect.top, w: rect.width, h: rect.height });
+    }, 60);
+  }
+  function pinnedLayer() {
+    let layer = document.getElementById("lesson-pinned");
+    if (!layer) {
+      layer = document.createElement("div");
+      layer.id = "lesson-pinned";
+      document.body.appendChild(layer);
+    }
+    return layer;
+  }
+  function layOutPinned() {
+    const items = [...pinnedLayer().children];
+    let top = 56;
+    for (const item of items) {
+      const scale = Math.min(150 / item.lessonW, 110 / item.lessonH, 1);
+      const tuckedH = item.lessonH * scale;
+      const grow = Math.min(1, 400 / item.lessonW, (window.innerHeight * 0.7) / item.lessonH);
+      item.style.top = `${top}px`;
+      item.style.setProperty("--tucked", scale);
+      item.style.setProperty("--tuck-shift", `${item.lessonW * scale - 30}px`);
+      item.style.setProperty("--grown", grow);
+      top += tuckedH + 10;
+    }
+    reportInput();
+  }
+  function closePinned(except) {
+    for (const item of pinnedLayer().children) if (item !== except) item.classList.remove("open");
+  }
+  function addPinned(data, width, height) {
+    const layer = pinnedLayer();
+    const item = document.createElement("div");
+    item.className = "lesson-pinned-card";
+    item.lessonW = width;
+    item.lessonH = height;
+    const picture = document.createElement("img");
+    picture.src = data;
+    picture.style.width = `${width}px`;
+    picture.style.height = `${height}px`;
+    const close = document.createElement("button");
+    close.className = "lesson-window-button close";
+    close.title = "unpin";
+    close.addEventListener("click", () => { item.remove(); layOutPinned(); });
+    item.append(picture, close);
+    // Only the open card reserves its full size from the desktop, so a lost "pointer left"
+    // can't leave a big dead area over the user's apps.
+    item.addEventListener("pointerenter", () => { closePinned(item); item.classList.add("open"); setTimeout(reportInput, 240); });
+    item.addEventListener("pointerleave", () => { item.classList.remove("open"); setTimeout(reportInput, 240); });
+    layer.prepend(item);
+    while (layer.children.length > 8) layer.lastChild.remove();
+    layOutPinned();
+    window.ClickySound?.play("paper-place");
+  }
+  // The screen moved on: what pointed at it no longer means anything, while cards and notes stay.
+  function screenChanged(reason) {
+    if (now() < lesson.ignoreScreenUntil || !lesson.pacer.lines.some((line) => line && line.start !== null)) return;
+    for (const record of lesson.painted.values()) {
+      const { mark, holder } = record;
+      if (!holder || record.card || record.faded) continue;
+      if (!(mark.glow || mark.role === "point" || mark.role === "ring" || mark.role === "frame" || mark.do === "pill" || mark.do === "badge")) continue;
+      record.faded = true;
+      holder.style.transition = "opacity 350ms";
+      holder.style.opacity = "0";
+      setTimeout(() => holder.remove(), 380);
+    }
+    console.info(`the screen changed (${reason}): pointing marks cleared`);
+  }
+  // Captions of what's being said, each word lighting up as it's reached.
+  function showCaption(k, duration) {
+    if (!lesson.captions) return;
+    const words = String(lesson.lineTexts[k] || "").trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return;
+    if (!lesson.captionBar) {
+      lesson.captionBar = document.createElement("div");
+      lesson.captionBar.className = "lesson-caption";
+      document.body.appendChild(lesson.captionBar);
+    }
+    const bar = lesson.captionBar;
+    clearTimeout(lesson.captionTimer);
+    bar.replaceChildren();
+    const total = words.reduce((sum, word) => sum + word.length + 1, 0);
+    let spoken = 0;
+    for (const word of words) {
+      const span = document.createElement("span");
+      span.textContent = `${word} `;
+      span.style.transitionDelay = `${(duration * spoken) / total}s`;
+      bar.appendChild(span);
+      spoken += word.length + 1;
+    }
+    bar.classList.add("shown");
+    void bar.offsetWidth;
+    bar.classList.add("speaking");
+    requestAnimationFrame(() => { for (const span of bar.children) span.classList.add("said"); });
+    bar.classList.remove("speaking");
+    lesson.captionTimer = setTimeout(() => bar.classList.remove("shown"), (duration + 1.2) * 1000);
+  }
+
   function drawWindow(mark) {
     const { scale } = lesson;
     const element = document.createElement("div");
@@ -791,6 +1096,7 @@
     if (mark.bg) element.style.setProperty("--board", mark.bg);
     lesson.windowLayer.appendChild(element);
     lesson.papers.push({ x: mark.at[0], y: mark.at[1], w: mark.w, h: mark.h, id: mark.id, bg: mark.bg || paperTone() });
+    addCard({ element, bar, box: { x: mark.at[0], y: mark.at[1], w: mark.w, h: mark.h }, paperId: mark.id });
     window.ClickySound?.play("paper-place");
     placeCloseButton();
     return element;
@@ -880,6 +1186,12 @@
       paperTone,
     });
     lesson.stages.set(mark.stage, stage);
+    if (mark.card) {
+      const [x, y, w, h] = stage.rect();
+      addCard({ element: stage.element, bar: stage.element.querySelector(".lesson-window-bar"), box: { x: x / lesson.scale.x, y: y / lesson.scale.y, w: w / lesson.scale.x, h: h / lesson.scale.y }, stage });
+    } else {
+      for (const card of lesson.cards) if (!card.ownStage && cardHolds(card, stage)) { card.stages.push(stage); applyCard(card); break; }
+    }
     placeCloseButton();
     reportInput();
     return stage;
@@ -892,14 +1204,24 @@
     const record = { mark, group: null, element: null };
     switch (mark.do) {
       case "line": case "arrow": case "circle": case "ellipse": case "rect": case "poly": case "path": case "dot":
-      case "text": case "pill": case "badge": case "highlight": case "image": case "spotlight": {
+      case "text": case "pill": case "badge": case "highlight": case "image": case "spotlight": case "molecule": {
         const group = svg("g", { "data-id": mark.id });
-        lesson.inkSvg.appendChild(group);
+        // The holder carries the card's drag and zoom, so the mark's own animations stay separate.
+        const holder = svg("g");
+        holder.appendChild(group);
+        lesson.inkSvg.appendChild(holder);
         record.group = group;
+        record.holder = holder;
         record.element = paintInk(group, mark, seconds);
+        joinCard(record);
         break;
       }
       case "window": record.element = drawWindow(mark); break;
+      case "act":
+        lesson.ignoreScreenUntil = now() + 2;
+        if (mark.kind === "type") toRust({ type: "type_text", x: mark.at[0], y: mark.at[1], text: mark.text });
+        else if (mark.kind === "handoff") toRust({ type: "handoff", task: mark.task, label: mark.label });
+        break;
       case "button": record.element = drawButton(mark); break;
       case "stage3d": createStage(mark); window.ClickySound?.play("paper-place"); break;
       case "part3d": {
@@ -925,6 +1247,30 @@
       const center = mark.do === "rect" ? [at[0] + mark.w / 2, at[1] + mark.h / 2] : at;
       toRust({ type: "point", x: center[0], y: center[1], label: "" });
     }
+  }
+
+  // A chemical structure, drawn in the handwriting with rounded bonds.
+  function drawMolecule(group, mark) {
+    const [x, y] = mark.at;
+    const holder = svg("g", { transform: `translate(${x} ${y})`, opacity: 0 });
+    group.appendChild(holder);
+    const picture = svg("svg", { width: mark.w, height: mark.h, viewBox: `0 0 ${mark.w} ${mark.h}`, overflow: "visible" });
+    holder.appendChild(picture);
+    const library = window.SmilesDrawer;
+    if (!library) { console.warn("molecule: SmilesDrawer isn't loaded"); return; }
+    try {
+      const drawer = new library.SvgDrawer({ width: mark.w, height: mark.h, bondThickness: 1.6, bondLength: mark.bond || 22, shortBondLength: 0.82, fontSizeLarge: 9, fontSizeSmall: 6, padding: 4, compactDrawing: false, terminalCarbons: false });
+      library.parse(mark.smiles, (tree) => drawer.draw(tree, picture, "light", null, false), (error) => toRust({ type: "warn", message: `molecule: ${error && error.message}` }));
+      picture.querySelectorAll("line").forEach((line) => { line.setAttribute("stroke-linecap", "round"); line.setAttribute("stroke-width", "1.8"); });
+      const bounds = picture.getBBox();
+      if (bounds.width > 0) {
+        const k = Math.min(mark.w / (bounds.width + 10), mark.h / (bounds.height + 10), 1.9);
+        const viewW = mark.w / k, viewH = mark.h / k;
+        picture.setAttribute("viewBox", `${bounds.x + bounds.width / 2 - viewW / 2} ${bounds.y + bounds.height / 2 - viewH / 2} ${viewW} ${viewH}`);
+      }
+      picture.querySelectorAll("text").forEach((words) => { words.setAttribute("font-family", "Hand, sans-serif"); words.setAttribute("font-weight", "600"); });
+    } catch (error) { toRust({ type: "warn", message: `molecule failed: ${error.message}` }); }
+    tween(0.6, (t) => holder.setAttribute("opacity", t), easeOutCubic);
   }
 
   function noteShape(group, mark) {
@@ -1031,6 +1377,7 @@
         return null;
       }
       case "text": drawText(group, mark, seconds); return null;
+      case "molecule": drawMolecule(group, mark); return null;
       case "pill": drawPill(group, mark); return null;
       case "badge": drawBadge(group, mark); return null;
       case "highlight": {
@@ -1168,6 +1515,13 @@
     }
     lesson.closeButton = null;
     lesson.papers = [];
+    lesson.cards = [];
+    lesson.dim = null;
+    lesson.pinning = null;
+    lesson.lineTexts = {};
+    lesson.canSaveVideo = false;
+    lesson.saveButton?.remove();
+    lesson.saveButton = null;
     lesson.fills = [];
     lesson.fillOrder = 0;
     lesson.placedWords = [];
@@ -1201,6 +1555,7 @@
         for (const event of data.events) {
           if (event.kind === "say") {
             lesson.pacer.addLine(event.k, event.text);
+            lesson.lineTexts[event.k] = event.text;
             toRust({ type: "say", k: event.k, text: event.text });
           } else if (event.kind === "mark") {
             lesson.pacer.add(event.mark);
@@ -1215,6 +1570,8 @@
         lesson.pacer.programDone = true;
         lesson.pacer.dirty = true;
         toRust({ type: "done", state: data.state });
+        lesson.canSaveVideo = true;
+        placeCloseButton();
         break;
       case "alive":
         lesson.expectingWorker = false;
@@ -1284,6 +1641,8 @@
     lesson.height = command.height;
     lesson.scale = { x: command.scale_x, y: command.scale_y };
     if (command.ink) lesson.ink = command.ink;
+    lesson.captions = !!command.captions;
+    lesson.recording = !!command.recording;
     lesson.inkSvg.setAttribute("viewBox", `0 0 ${command.width} ${command.height}`);
     // The watchdog ended the last program, so its variables are gone. What it drew
     // can't be built on, so the new turn starts on a clean canvas.
@@ -1320,7 +1679,19 @@
         lesson.worker?.postMessage({ type: "end" });
         schedule();
         break;
+      case "lesson_pinned": {
+        const card = lesson.pinning;
+        lesson.pinning = null;
+        if (card) card.element.classList.remove("lesson-being-pinned");
+        if (command.data) {
+          addPinned(command.data, command.width, command.height);
+          if (card) removeCard(card);
+        }
+        break;
+      }
+      case "lesson_screen_changed": screenChanged(command.reason); break;
       case "lesson_line":
+        if (command.event === "start") showCaption(command.k, command.duration);
         lesson.pacer.lineEvent(command.k, command.event, command.duration);
         schedule();
         break;

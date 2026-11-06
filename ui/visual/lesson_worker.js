@@ -712,9 +712,20 @@ const api = {
     return push({ do: "button", at: [x, y], text: String(words == null ? "" : words).slice(0, 60), action: allowed });
   },
   copyText: (words) => { warn(`copyText ignored; offer a button instead: ${String(words).slice(0, 40)}`); },
-  typeText: () => warn("typeText isn't available on this desktop; offer a {copy} button instead."),
+  // Puts text into the field at x, y as this line is heard. It never presses Return; text it
+  // can't type goes on the clipboard instead.
+  typeText: (x, y, words) => push({ do: "act", kind: "type", at: [x, y], text: String(words == null ? "" : words).slice(0, 4000) }),
   openPage: (url) => warn(`openPage ignored; offer an {open} button instead: ${String(url).slice(0, 60)}`),
-  handOff: () => warn("handOff isn't available on this desktop."),
+  // Starts a job in a terminal the user can watch, as this line is heard.
+  handOff(o) {
+    const job = o && typeof o === "object" ? o : { task: String(o == null ? "" : o) };
+    if (!String(job.task || "").trim()) { warn("handOff() needs a task"); return null; }
+    return push({ do: "act", kind: "handoff", at: [0, 0], task: String(job.task).slice(0, 8000), label: String(job.label || "").slice(0, 60) });
+  },
+  // A chemical structure from its SMILES string, in that rectangle.
+  molecule(smiles, x, y, w, h, o) {
+    return push({ do: "molecule", at: [x, y], w: finite(w) ? w : 240, h: finite(h) ? h : 180, smiles: String(smiles || "").slice(0, 2000) }, o);
+  },
 
   // ---- charts in data units
   graph(gx, gy, gw, gh, o) {
@@ -994,7 +1005,7 @@ function edit(op, target, fields) {
 
 // ---------------------------------------------------------------- 3D figures
 const MAJOR_PIPE_RADIUS = 0.08;
-const PLACE_KEYS = new Set(["at", "pos", "rot", "rotate", "scale", "parent", "name", "mat", "from", "to", "mirror", "copies", "around", "cut",
+const PLACE_KEYS = new Set(["flat", "bands", "colors", "at", "pos", "rot", "rotate", "scale", "parent", "name", "mat", "from", "to", "mirror", "copies", "around", "cut",
   "color", "roughness", "metalness", "opacity", "glow", "emissive", "double"]);
 const PART_KINDS = ["box", "cyl", "cylinder", "cone", "tube", "lathe", "sphere", "torus", "capsule", "pipe", "spring", "gear", "extrude", "blob", "poly"];
 const MATERIAL_KINDS = new Set(["steel", "alu", "aluminum", "aluminium", "titanium", "chrome", "brass", "copper", "gold", "iron", "black", "rubber", "glass",
@@ -1090,7 +1101,9 @@ function makeFigure(x, y, w, h, options) {
     const partId = `${stage}p${++partCount}`;
     if (p.cut === true) hasFacingCut = true;
     const material = {};
-    for (const key of ["roughness", "metalness", "opacity", "double"]) if (p[key] !== undefined) material[key] = p[key];
+    for (const key of ["roughness", "metalness", "opacity", "double", "flat"]) if (p[key] !== undefined) material[key] = p[key];
+    const stripes = Array.isArray(p.bands) ? p.bands : Array.isArray(p.colors) ? p.colors : null;
+    if (stripes && stripes.length) material.bands = stripes.slice(0, 16).map((c) => realTone(c, "#FFFFFF"));
     if (p.color) material.color = realTone(p.color);
     if (finite(p.glow)) material.glow = p.glow;
     if (p.emissive) material.emissive = tone(p.emissive);
