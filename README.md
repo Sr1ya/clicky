@@ -5,8 +5,20 @@ hotkey, ask a question out loud, and Clicky looks at your screen, answers with
 its voice, and flies a little blue triangle to the button or menu it's talking
 about.
 
+On top of that it teaches: answers come with live lessons, hand-drawn 2D cards
+and 3D models you can rotate, tap and explode into labelled parts, all timed to
+the voice. The original Clicky didn't have the 3D part; it's new here.
+
 Built for **KDE Plasma 6 on Wayland**. Other desktops partly work (see
 [Limitations](#limitations)).
+
+## Demo
+
+[![Clicky explaining DNA replication with a 3D model next to Google search](docs/demo.jpg)](https://github.com/Sr1ya/clicky/releases/download/v0.1.0/clicky-linux-demo.mp4)
+
+**[▶ Watch the demo (2:47)](https://github.com/Sr1ya/clicky/releases/download/v0.1.0/clicky-linux-demo.mp4)**:
+DNA replication, a Starship launch and a telephoto lens, each explained live
+with voice, pointing and 2D/3D drawings.
 
 ## How it works
 
@@ -48,22 +60,55 @@ release ─▶ ForceEndpoint ─▶ final transcript
 | `src/desktop_integration.rs` | D-Bus service, KWin cursor script, shortcut portal, .desktop file |
 | `ui/` | Settings panel (plain HTML/CSS/JS in a Tauri webview) |
 
-## Setup
+## Install
 
-System packages (Ubuntu/Debian):
+You need **KDE Plasma 6 on Wayland** (check with `echo $XDG_SESSION_TYPE`; it
+should print `wayland`). Packages (.deb, AppImage) aren't ready yet, so for now
+you build from source. It takes about 5 minutes.
+
+**1. System packages** (Ubuntu/Debian/KDE neon):
 
 ```bash
 sudo apt install build-essential pkg-config libssl-dev libgtk-3-dev \
   libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-  libgtk-layer-shell-dev libasound2-dev speech-dispatcher
+  libgtk-layer-shell-dev libasound2-dev speech-dispatcher \
+  ffmpeg wl-clipboard libnotify-bin git curl
 ```
 
-Build and run:
+`ffmpeg` is for saving lessons as videos, `wl-clipboard` for copy actions.
+Optional: `ydotool` lets Clicky move the mouse and type for you.
+
+On Fedora: `sudo dnf install gcc pkg-config openssl-devel gtk3-devel
+webkit2gtk4.1-devel libayatana-appindicator-gtk3-devel librsvg2-devel
+gtk-layer-shell-devel alsa-lib-devel speech-dispatcher ffmpeg wl-clipboard
+libnotify git`
+
+**2. Rust** (skip if `cargo --version` already works):
 
 ```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
+**3. Build and run:**
+
+```bash
+git clone https://github.com/Sr1ya/clicky.git
+cd clicky
 cargo build --release
 ./target/release/clicky
 ```
+
+**4. First launch:**
+
+- The settings panel opens. Paste your API keys (table below).
+- KDE asks you to confirm the **Ctrl+Alt+Space** shortcut. Click OK.
+- Clicky installs a `.desktop` entry, so it shows up in your app launcher
+  after this. That entry also gives it permission to take screenshots.
+- Run `./target/release/clicky selftest` to check monitors, screenshots and
+  the microphone.
+
+Then **hold Ctrl+Alt+Space, ask a question, and let go.**
 
 On first launch the panel opens. Add your keys there (saved to
 `~/.config/clicky/config.toml` with mode 0600), or export them as environment
@@ -158,8 +203,8 @@ gateways ignore `thinking: disabled`, and without the effort setting Sonnet
   and the buddy can't follow the cursor (it still appears when pointing).
 - Screenshots on mixed-scale multi-monitor setups are cropped with a single
   scale ratio, so pointing can be slightly off on the non-primary scale.
-- Each turn takes a fresh screenshot (~1 s with spectacle), which adds latency
-  compared to macOS ScreenCaptureKit.
+- Each turn takes a fresh screenshot (well under 1 s through KWin, ~2 s if it
+  has to fall back to spectacle or the portal).
 - Figures run at about 25 fps here: GTK3 copies the WebKit surface every frame, and that cost
   dominates, not the GPU work. A smaller surface would help but isn't done yet.
 - No onboarding video or analytics (both were Mac-specific/remote services).
