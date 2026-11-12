@@ -171,3 +171,7 @@ Hover a card for its close, pin and full-screen buttons, and drag its title bar 
 The ⤓ button by the close button, or `clicky save-video`, replays the last lesson and saves it with its voice to `~/Videos/Clicky`. The replay is spoken again, so it uses your text-to-speech allowance, and the picture is captured at about 8 to 10 frames a second.
 
 `typeText` needs `ydotoold` running, and `handOff` opens Claude Code in Konsole.
+
+## License
+
+MIT. Clicky for Linux started from [farzaa/clicky](https://github.com/farzaa/clicky) (MIT, © Farza); see [LICENSE](LICENSE).
