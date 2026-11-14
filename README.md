@@ -60,6 +60,10 @@ release ─▶ ForceEndpoint ─▶ final transcript
 | `src/desktop_integration.rs` | D-Bus service, KWin cursor script, shortcut portal, .desktop file |
 | `ui/` | Settings panel (plain HTML/CSS/JS in a Tauri webview) |
 
+**[Open the 3D gallery](https://sr1ya.github.io/clicky/)**: seven models Clicky built during
+real lessons, replayed in your browser with the same engine. Drag to rotate, tap a part.
+Rebuild it with `node tools/gallery/build.mjs`.
+
 ## Install
 
 You need **KDE Plasma 6 on Wayland** (check with `echo $XDG_SESSION_TYPE`; it

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clicky for Linux: 3D gallery</title>
+<meta name="description" content="3D models that Clicky for Linux built live while explaining. Drag to rotate, tap a part.">
+<style>
+  :root {
+    --bg: #0f1218; --panel: #171b24; --line: #262c39; --text: #e9ecf2; --soft: #9aa3b5;
+    --blue: #3380ff; --desk-a: #dfe5ee; --desk-b: #c9d2df;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: #7fb0ff; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 16px 56px; }
+  header h1 { margin: 0 0 6px; font-size: clamp(24px, 4vw, 34px); letter-spacing: -0.02em; }
+  header h1 span { color: var(--blue); }
+  header p { margin: 0; color: var(--soft); max-width: 760px; }
+  .links { margin-top: 12px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 15px; }
+  .picker { display: flex; gap: 8px; flex-wrap: wrap; margin: 24px 0 14px; }
+  .picker button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 999px;
+    padding: 8px 15px; font: inherit; font-size: 15px; cursor: pointer;
+  }
+  .picker button:hover { border-color: #3a4459; }
+  .picker button[aria-pressed="true"] { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .picker small { opacity: 0.7; margin-left: 6px; }
+  .stage {
+    position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden;
+    border: 1px solid var(--line); background: linear-gradient(160deg, var(--desk-a), var(--desk-b));
+  }
+  .stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .asked { margin: 14px 0 0; color: var(--soft); font-size: 15px; }
+  .asked b { color: var(--text); font-weight: 600; }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .controls button, .controls label {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 12px; font: inherit; font-size: 14px; cursor: pointer;
+  }
+  .controls button[aria-pressed="true"] { border-color: var(--blue); color: #9cc3ff; }
+  .controls .group { display: flex; gap: 0; }
+  .controls .group button { border-radius: 0; margin-left: -1px; }
+  .controls .group button:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
+  .controls .group button:last-child { border-radius: 0 8px 8px 0; }
+  .controls label { display: flex; gap: 7px; align-items: center; }
+  .hint { color: var(--soft); font-size: 14px; margin-left: auto; }
+  .toast {
+    margin-top: 12px; padding: 10px 14px; border-radius: 10px; background: #14233f; border: 1px solid #23427a;
+    font-size: 14px; display: none;
+  }
+  .toast.on { display: block; }
+  section { margin-top: 34px; }
+  section h2 { font-size: 20px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  section p { margin: 0 0 10px; color: #c5cbd8; max-width: 800px; }
+  details { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
+  summary { cursor: pointer; font-weight: 600; }
+  pre { margin: 12px 0 2px; overflow: auto; max-height: 460px; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: #cfd6e4; }
+  footer { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--soft); font-size: 14px; }
+  @media (max-width: 640px) { .hint { margin-left: 0; width: 100%; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span>Clicky</span> for Linux: 3D gallery</h1>
+    <p>Each model below was built live by Clicky while it answered a spoken question. Nothing is pre-made:
+      this page replays the lesson with the same engine the app runs. Drag a model to rotate it, tap a part to pick it.</p>
+    <div class="links">
+      <a href="https://github.com/Sr1ya/clicky">Code on GitHub</a>
+      <a href="https://github.com/Sr1ya/clicky/releases/download/v0.1.0/clicky-linux-demo.mp4">Demo video (2:47)</a>
+    </div>
+  </header>
+
+  <div class="picker" id="picker" role="group" aria-label="Choose a model"></div>
+
+  <div class="stage"><iframe id="player" src="player.html" title="Lesson player" allow="autoplay"></iframe></div>
+
+  <p class="asked" id="asked"></p>
+  <div class="controls">
+    <button id="replay">Replay</button>
+    <div class="group" role="group" aria-label="Speed">
+      <button data-speed="1" aria-pressed="true">Lesson pace</button>
+      <button data-speed="3" aria-pressed="false">3× faster</button>
+      <button data-speed="0" aria-pressed="false">Skip to finished model</button>
+    </div>
+    <label><input type="checkbox" id="sounds"> Drawing sounds</label>
+    <span class="hint">In the app a voice speaks each line. Here the captions stand in for it.</span>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <section>
+    <h2>How a model gets built in seconds</h2>
+    <p>Claude doesn't write a mesh. It writes a short program, one part per line, and the engine turns each line
+      into lit, bevelled geometry on the GPU. Lines run the moment they arrive, so the model grows while Claude is still
+      writing, and each part appears in time with the words about it.</p>
+    <details>
+      <summary>The program Claude wrote for this model <span id="count" style="font-weight:400;color:var(--soft)"></span></summary>
+      <pre id="code"></pre>
+    </details>
+  </section>
+
+  <footer>
+    Clicky for Linux started from the open-source <a href="https://github.com/farzaa/clicky">farzaa/clicky</a>.
+    The lesson format follows HeyClicky's app; the engine on this page is rewritten for Linux in Rust and JavaScript (three.js).
+    Lessons here were generated by Claude Opus 5.5 at low effort. Lines that pointed at the asker's own screen are left out, and each figure is moved to fill this page.
+  </footer>
+</div>
+
+<script>
+const LESSONS = /*LESSONS*/[];
+const player = document.getElementById("player");
+const picker = document.getElementById("picker");
+const toast = document.getElementById("toast");
+let current = LESSONS[0];
+let speed = 1;
+let ready = false;
+
+function play() {
+  if (!ready || !current) return;
+  toast.classList.remove("on");
+  player.contentWindow.postMessage({ clickyGallery: true, type: "play", code: current.code, speed, sounds: document.getElementById("sounds").checked }, "*");
+}
+
+function choose(lesson) {
+  current = lesson;
+  for (const button of picker.children) button.setAttribute("aria-pressed", String(button.dataset.id === lesson.id));
+  document.getElementById("asked").innerHTML = "Asked out loud: <b></b>";
+  document.querySelector("#asked b").textContent = `"${lesson.question}"`;
+  document.getElementById("code").textContent = lesson.code;
+  document.getElementById("count").textContent = `(${lesson.code.split("\n").length} lines, ${lesson.parts} part statements)`;
+  history.replaceState(null, "", `#${lesson.id}`);
+  play();
+}
+
+for (const lesson of LESSONS) {
+  const button = document.createElement("button");
+  button.dataset.id = lesson.id;
+  button.textContent = lesson.title;
+  button.addEventListener("click", () => choose(lesson));
+  picker.appendChild(button);
+}
+
+document.getElementById("replay").addEventListener("click", play);
+document.getElementById("sounds").addEventListener("change", play);
+for (const button of document.querySelectorAll("[data-speed]")) {
+  button.addEventListener("click", () => {
+    speed = Number(button.dataset.speed);
+    for (const other of document.querySelectorAll("[data-speed]")) other.setAttribute("aria-pressed", String(other === button));
+    play();
+  });
+}
+
+window.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || !data.clickyGallery || event.source !== player.contentWindow) return;
+  if (data.type === "ready") {
+    ready = true;
+    choose(LESSONS.find((lesson) => lesson.id === location.hash.slice(1)) || LESSONS[0]);
+  } else if (data.type === "ask") {
+    toast.textContent = `In the app, that button asks Clicky the next question: "${data.text}"`;
+    toast.classList.add("on");
+  } else if (data.type === "note") {
+    toast.textContent = data.text;
+    toast.classList.add("on");
+  } else if (data.type === "closed") {
+    toast.textContent = "Closed. Press Replay to build it again.";
+    toast.classList.add("on");
+  }
+});
+
+// The engine sizes itself once, so a resized window replays at the new size.
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(play, 400); });
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+[
+  {"file": "jet-engine.js", "title": "Jet engine", "question": "Show me how a jet engine works in 3D."},
+  {"file": "human-heart.js", "title": "Human heart", "question": "Show me the human heart in 3D and how blood flows through it."},
+  {"file": "v8-engine.js", "title": "V8 engine", "question": "Show me how a V8 car engine works in 3D."},
+  {"file": "rocket.js", "title": "Starship", "question": "Show me how a two-stage rocket like Starship launches, in 3D."},
+  {"file": "dna-replication.js", "title": "DNA replication", "question": "Show me how DNA copies itself in 3D."},
+  {"file": "animal-cell.js", "title": "Animal cell", "question": "Show me what's inside an animal cell in 3D."},
+  {"file": "telephoto-lens.js", "title": "Telephoto lens", "question": "How does this telephoto lens work? (asked while reading about a Nikon lens)"}
+]
